@@ -92,6 +92,8 @@
     return `${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/ws`;
   }
 
+
+
   const { COLORS, PIP_POS, tileAria, sortHand } = CrossmeldTiles;
   const {
     isCompatible, isWild, meldNaturalCount, meldWildCount, candidateMelds,
@@ -99,6 +101,56 @@
     meldName, provisionalRoundScore, canTopAddToMeld,
   } = CrossmeldRules;
   const { Game, GameError, currentPlayer: playerOnTurn } = CrossmeldGame;
+
+  let notificationAudioContext = null;
+
+  function ensureNotificationAudio() {
+    const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+    if (!AudioContextClass) return null;
+    if (!notificationAudioContext) notificationAudioContext = new AudioContextClass();
+    if (notificationAudioContext.state === 'suspended') {
+      notificationAudioContext.resume().catch(() => {});
+    }
+    return notificationAudioContext;
+  }
+
+  function playNotificationTone(notes) {
+    const ctx = ensureNotificationAudio();
+    if (!ctx || ctx.state === 'closed') return;
+    const start = ctx.currentTime + 0.01;
+    for (const note of notes) {
+      const oscillator = ctx.createOscillator();
+      const gain = ctx.createGain();
+      const noteStart = start + note.delay;
+      oscillator.type = 'sine';
+      oscillator.frequency.setValueAtTime(note.frequency, noteStart);
+      gain.gain.setValueAtTime(0.0001, noteStart);
+      gain.gain.exponentialRampToValueAtTime(note.gain, noteStart + 0.012);
+      gain.gain.exponentialRampToValueAtTime(0.0001, noteStart + note.duration);
+      oscillator.connect(gain);
+      gain.connect(ctx.destination);
+      oscillator.start(noteStart);
+      oscillator.stop(noteStart + note.duration + 0.02);
+    }
+  }
+
+  function playTurnNotificationSound() {
+    playNotificationTone([
+      { frequency: 523.25, delay: 0, duration: 0.14, gain: 0.085 },
+      { frequency: 783.99, delay: 0.12, duration: 0.20, gain: 0.095 },
+    ]);
+  }
+
+  function playChatNotificationSound() {
+    playNotificationTone([
+      { frequency: 659.25, delay: 0, duration: 0.11, gain: 0.065 },
+    ]);
+  }
+
+  // Unlock Web Audio on the first ordinary user interaction. Browsers generally
+  // block programmatic audio until the page has received a gesture.
+  document.addEventListener('pointerdown', ensureNotificationAudio, { once: true, passive: true });
+  document.addEventListener('keydown', ensureNotificationAudio, { once: true });
   let game = null;
   let state = null;
   const online = {
@@ -108,6 +160,7 @@
     sessionNonce:Array.from(crypto.getRandomValues(new Uint32Array(2)),n=>n.toString(16).padStart(8,'0')).join(''), sort:'color',
     handOrder:[], waitingForFinish:false, viewRound:null, retryTimer:null, reconnecting:false,
     pingMs:null, pingTimer:null, pingNextId:0, pingPending:new Map(),
+    lastChatMessageId:null, awaitingResync:false, awaitingChatResync:false,
   };
   const handPlayer = () => online.active ? state.players[online.playerId] : currentPlayer();
   const isMyTurn = () => !online.active || (online.connected &&
@@ -314,9 +367,15 @@
   }
   function applyPredictedAction(packet) {return applyActionToGame(game,packet);}
 
+  function shouldPlayTurnChime(previous, next, seatId, resyncing) {
+    return !resyncing && !next.roundOver && !next.paused && next.currentPlayerId===seatId &&
+      (!previous || previous.roundOver || previous.currentPlayerId!==seatId);
+  }
+
   function receiveOnlineView(view, acknowledgedId = null) {
     if(!online.active) return;
     if (online.confirmed && view.revision < online.confirmed.revision) return;
+    const notifyTurn=shouldPlayTurnChime(online.confirmed,view,online.playerId,online.awaitingResync);
     if (acknowledgedId !== null) {
       const idx=online.pending.findIndex(p=>p.actionId===acknowledgedId);
       if(idx>=0)online.pending.splice(0,idx+1);
@@ -327,6 +386,8 @@
     }
     const previousHand=online.active && state?.players?.[online.playerId]?.hand?.filter(Boolean).map(t=>t.id) || online.handOrder;
     online.confirmed=view;
+    online.awaitingResync=false;
+    if(notifyTurn)playTurnNotificationSound();
     online.busy=online.pending.some(p=>['drawStock','takePileExisting','takePileNew'].includes(p.action));
     online.waitingForFinish=false;
     const players=view.players.map((p)=>({
@@ -464,6 +525,9 @@
     if(kind!=='resume' && !name)return showOnlineWaiting('Please enter a username.');
     online.connected=false;
     online.reconnecting=kind==='resume';
+    online.awaitingResync=kind==='resume';
+    online.awaitingChatResync=kind==='resume';
+    if(kind!=='resume')online.lastChatMessageId=null;
     const ws=new WebSocket(url);
     online.socket=ws;
     renderConnectionIndicator();
@@ -482,6 +546,7 @@
       if(online.socket!==ws)return;
       if(msg.type==='latency_pong'){receiveLatencyPong(msg);return;}
       if(msg.type==='welcome'){
+        if(online.roomCode && online.roomCode!==msg.roomCode)online.lastChatMessageId=null;
         online.roomCode=msg.roomCode;
         online.token=msg.token;
         online.playerId=msg.seatId;
@@ -1767,6 +1832,7 @@
     online.handOrder=[];online.sort='color';
     ui.selected.clear();ui.expandedMelds.clear();closeModal();stopHandMomentum();
     online.lobby=lobby;online.playerId=lobby.seatId;
+    online.awaitingResync=false;
     online.roomCode=lobby.code;
     showScreen('lobbyScreen');
     document.getElementById('lobbyCode').textContent=lobby.code;
@@ -1803,8 +1869,22 @@
     if(wasAtBottom||!container.dataset.initialized)container.scrollTop=container.scrollHeight;
     container.dataset.initialized='1';
   }
+  function shouldPlayChatChime(messages,lastSeenId,ownSeatId) {
+    return lastSeenId!==null && messages.some(message=>
+      Number.isSafeInteger(message.id) && message.id>lastSeenId &&
+      !message.system && message.senderId!==ownSeatId);
+  }
   function renderRoomMessages(messages) {
-    online.messages=messages||[];
+    const received=Array.isArray(messages)?messages:[];
+    // The first snapshot is history, not a new message. Ignore repeat broadcasts
+    // and system notices; don't alert a player about their own chat message.
+    if(online.active && online.connected && !online.awaitingChatResync &&
+      shouldPlayChatChime(received,online.lastChatMessageId,online.playerId))playChatNotificationSound();
+    online.awaitingChatResync=false;
+    const newestId=received.reduce((max,message)=>
+      Number.isSafeInteger(message.id)?Math.max(max,message.id):max,0);
+    online.lastChatMessageId=Math.max(online.lastChatMessageId??0,newestId);
+    online.messages=received;
     renderChatInto(document.getElementById('lobbyChatLog'),online.messages);
     renderChatInto(document.getElementById('gameChatLog'),online.messages);
   }
@@ -1822,6 +1902,7 @@
     online.busy=false;online.waitingForFinish=false;online.roomCode=null;online.token=null;
     online.lobby=null;online.messages=[];online.viewRound=null;online.leaving=false;online.closing=false;
     online.playerId=null;online.handOrder=[];online.sort='color';
+    online.lastChatMessageId=null;online.awaitingResync=false;online.awaitingChatResync=false;
     ui.selected.clear();ui.expandedMelds.clear();closeModal();stopHandMomentum();
     if(online.retryTimer)clearTimeout(online.retryTimer);
     online.retryTimer=null;

@@ -18,8 +18,8 @@ const connected = seat => !!seat.connection && seat.connection.readyState === 1;
 
 class RoomManager {
   constructor() { this.rooms = new Map(); }
-  record(room, text, system = true, sender = null) {
-    const entry = {id:++room.messageId, system, sender, text};
+  record(room, text, system = true, sender = null, senderId = null) {
+    const entry = {id:++room.messageId, system, sender, senderId, text};
     room.messages.push(entry);
     if(room.messages.length>75)room.messages.shift();
     return entry;
@@ -124,7 +124,7 @@ class RoomManager {
     const now=Date.now();
     if(seat.lastMessageAt && now-seat.lastMessageAt<450)throw new GameError('chat','You are sending messages too quickly.');
     seat.lastMessageAt=now;
-    return this.record(room,text.trim(),false,seat.name);
+    return this.record(room,text.trim(),false,seat.name,seat.id);
   }
   getLobby(room,seat) {
     if(!room?.seats.includes(seat))throw new GameError('room','Not in this room.');
