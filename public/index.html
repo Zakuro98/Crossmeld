@@ -29,9 +29,6 @@
   <section id="onlineEntryScreen" class="setup card hidden">
     <h2 id="onlineEntryTitle">Create room</h2>
     <p class="muted" id="onlineEntryHelp">Create a private room and invite friends with the code.</p>
-    <div class="connection-indicator" data-connection-indicator data-state="offline" role="status" aria-label="Online server connection">
-      <span class="connection-dot" aria-hidden="true"></span><span class="connection-label">Not connected</span>
-    </div>
     <div id="onlineEntryFields" class="setup-grid single-field">
       <label>Username<input id="onlineName" maxlength="20" placeholder="Enter username" autocomplete="off" required /></label>
       <label id="entryCodeLabel" class="hidden">Room code<input id="onlineCode" maxlength="4" placeholder="ABCD" autocapitalize="characters" autocomplete="off" spellcheck="false" inputmode="text" /></label>
@@ -41,15 +38,15 @@
       <button type="button" id="onlineEntryConfirmBtn" class="primary">Create Room</button>
     </div>
     <div id="onlineWaiting" class="tiny muted hidden" role="status"></div>
+    <div class="connection-indicator" data-connection-indicator data-state="offline" role="status" aria-label="Online server connection">
+      <span class="connection-dot" aria-hidden="true"></span><span class="connection-label">Not connected</span>
+    </div>
   </section>
 
   <section id="lobbyScreen" class="setup card lobby-screen hidden">
     <div class="crossmeld-logo crossmeld-logo-compact lobby-logo" aria-label="Crossmeld">
       <span class="crossmeld-mark" aria-hidden="true"><span class="logo-tile logo-tile-a"></span><span class="logo-tile logo-tile-b"></span></span>
       <span class="crossmeld-wordmark"><span class="crossmeld-word-cross">Cross</span><span class="crossmeld-word-meld">Meld</span></span>
-    </div>
-    <div class="connection-indicator lobby-server-indicator" data-connection-indicator data-state="offline" role="status" aria-label="Online server connection">
-      <span class="connection-dot" aria-hidden="true"></span><span class="connection-label">Not connected</span>
     </div>
     <div class="row between lobby-heading">
       <div><h2>Room <span id="lobbyCode"></span></h2><p class="tiny muted">Share this code with your friends.</p></div>
@@ -85,6 +82,9 @@
           <button type="submit">Send</button>
         </form>
       </section>
+    </div>
+    <div class="connection-indicator lobby-server-indicator" data-connection-indicator data-state="offline" role="status" aria-label="Online server connection">
+      <span class="connection-dot" aria-hidden="true"></span><span class="connection-label">Not connected</span>
     </div>
   </section>
 
@@ -258,9 +258,6 @@
             <span class="crossmeld-wordmark"><span class="crossmeld-word-cross">Cross</span><span class="crossmeld-word-meld">Meld</span></span>
           </div>
           <div id="roundLabel" class="tiny muted"></div>
-          <div id="gameConnectionIndicator" class="connection-indicator hidden" data-connection-indicator data-state="offline" role="status" aria-label="Online server connection">
-            <span class="connection-dot" aria-hidden="true"></span><span class="connection-label">Not connected</span>
-          </div>
         </div>
         <div class="game-room-actions">
           <button id="gameAbortBtn" class="danger hidden" type="button">Abort game</button>
@@ -321,6 +318,9 @@
         <button type="submit">Send</button>
       </form>
     </section>
+    <div id="gameConnectionIndicator" class="connection-indicator hidden" data-connection-indicator data-state="offline" role="status" aria-label="Online server connection">
+      <span class="connection-dot" aria-hidden="true"></span><span class="connection-label">Not connected</span>
+    </div>
   </section>
 </div>
 

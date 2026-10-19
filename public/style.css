@@ -705,7 +705,7 @@
 
 /* Small online-only connection badge, matching Crossmeld's existing palette. */
 .connection-indicator {
-  display: inline-flex;
+  display: flex;
   align-items: center;
   gap: 6px;
   width: fit-content;
@@ -718,7 +718,7 @@
   font-size: 11px;
   font-weight: 700;
   line-height: 1.35;
-  margin-bottom: 12px;
+  margin: 14px auto 0;
 }
 .connection-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--muted); flex: 0 0 auto; }
 .connection-indicator[data-state="online"] { color: var(--good); border-color: rgba(134,211,161,.35); }
@@ -726,5 +726,3 @@
 .connection-indicator[data-state="connecting"] { color: var(--warn); }
 .connection-indicator[data-state="connecting"] .connection-dot { background: var(--warn); }
 .connection-indicator[data-state="offline"] .connection-dot { background: var(--danger); }
-.lobby-server-indicator { margin-bottom: 8px; }
-.topbar .connection-indicator { margin: 4px 0 0; }

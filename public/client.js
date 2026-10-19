@@ -1711,10 +1711,13 @@
 
   const screens=['menuScreen','setupScreen','onlineEntryScreen','lobbyScreen','howScreen','gameScreen'];
   function showScreen(id) {
+    // State snapshots call this for every online move and lobby refresh. Only
+    // reset page position when actually navigating to a different screen.
+    const changingScreen=document.getElementById(id).classList.contains('hidden');
     for(const name of screens)document.getElementById(name).classList.toggle('hidden',name!==id);
     if(id!=='gameScreen')document.getElementById('gameChatPanel').classList.add('hidden');
     document.getElementById('gameConnectionIndicator').classList.toggle('hidden',id!=='gameScreen'||!online.active);
-    window.scrollTo(0,0);
+    if(changingScreen)window.scrollTo(0,0);
   }
   function showMenu(){showScreen('menuScreen');}
   // Room codes are case-insensitive and contain exactly four ASCII letters/digits.
