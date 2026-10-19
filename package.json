@@ -1,0 +1,16 @@
+{
+  "name": "crossmeld",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Crossmeld local play and server-authoritative online multiplayer",
+  "scripts": {
+    "start": "node server/server.js",
+    "build:pages": "node scripts/build-pages.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  }
+}

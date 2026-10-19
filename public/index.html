@@ -1,0 +1,336 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>Crossmeld</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Nunito+Sans:wght@400;500;600;700;800;900;1000&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="app">
+  <section id="menuScreen" class="setup card menu-screen">
+    <div class="crossmeld-logo crossmeld-logo-large" aria-label="Crossmeld">
+      <span class="crossmeld-mark" aria-hidden="true"><span class="logo-tile logo-tile-a"></span><span class="logo-tile logo-tile-b"></span></span>
+      <span class="crossmeld-wordmark"><span class="crossmeld-word-cross">Cross</span><span class="crossmeld-word-meld">Meld</span></span>
+    </div>
+    <p class="muted">Make melds, complete all six, and race to go out.</p>
+    <div class="menu-actions">
+      <button type="button" id="menuLocalBtn" class="primary">Local Play</button>
+      <button type="button" id="menuCreateBtn">Create Room</button>
+      <button type="button" id="menuJoinBtn">Join Room</button>
+      <button type="button" id="menuHowBtn" class="ghost">How to Play</button>
+      <button type="button" id="menuResumeBtn" class="ghost hidden">Resume online match</button>
+    </div>
+  </section>
+
+  <section id="onlineEntryScreen" class="setup card hidden">
+    <h2 id="onlineEntryTitle">Create room</h2>
+    <p class="muted" id="onlineEntryHelp">Create a private room and invite friends with the code.</p>
+    <div class="connection-indicator" data-connection-indicator data-state="offline" role="status" aria-label="Online server connection">
+      <span class="connection-dot" aria-hidden="true"></span><span class="connection-label">Not connected</span>
+    </div>
+    <div id="onlineEntryFields" class="setup-grid single-field">
+      <label>Username<input id="onlineName" maxlength="20" placeholder="Enter username" autocomplete="off" required /></label>
+      <label id="entryCodeLabel" class="hidden">Room code<input id="onlineCode" maxlength="4" placeholder="ABCD" autocapitalize="characters" autocomplete="off" spellcheck="false" inputmode="text" /></label>
+    </div>
+    <div class="row" style="margin-top:14px">
+      <button type="button" id="onlineEntryBackBtn" class="ghost">Back</button>
+      <button type="button" id="onlineEntryConfirmBtn" class="primary">Create Room</button>
+    </div>
+    <div id="onlineWaiting" class="tiny muted hidden" role="status"></div>
+  </section>
+
+  <section id="lobbyScreen" class="setup card lobby-screen hidden">
+    <div class="crossmeld-logo crossmeld-logo-compact lobby-logo" aria-label="Crossmeld">
+      <span class="crossmeld-mark" aria-hidden="true"><span class="logo-tile logo-tile-a"></span><span class="logo-tile logo-tile-b"></span></span>
+      <span class="crossmeld-wordmark"><span class="crossmeld-word-cross">Cross</span><span class="crossmeld-word-meld">Meld</span></span>
+    </div>
+    <div class="connection-indicator lobby-server-indicator" data-connection-indicator data-state="offline" role="status" aria-label="Online server connection">
+      <span class="connection-dot" aria-hidden="true"></span><span class="connection-label">Not connected</span>
+    </div>
+    <div class="row between lobby-heading">
+      <div><h2>Room <span id="lobbyCode"></span></h2><p class="tiny muted">Share this code with your friends.</p></div>
+      <button id="copyCodeBtn" class="ghost" type="button">Copy code</button>
+    </div>
+    <div class="lobby-layout">
+      <div class="stack">
+        <div class="subcard lobby-panel">
+          <h3>Players <span id="lobbySeatCount" class="muted"></span></h3>
+          <div id="lobbyPlayers" class="lobby-players"></div>
+        </div>
+        <div class="subcard lobby-panel">
+          <h3>Game settings</h3>
+          <div class="setup-grid">
+            <label>Players<select id="lobbyPlayerCount"><option value="2">2 players</option><option value="3">3 players</option><option value="4">4 players</option></select></label>
+            <label>Game target<input id="lobbyTargetScore" type="number" min="100" max="10000" step="50" value="1000" /></label>
+            <label>Round 1 starts<select id="lobbyFirstPlayer"><option value="random">Random</option></select></label>
+          </div>
+          <p class="tiny muted" id="lobbySettingsNote"></p>
+          <button type="button" id="lobbySaveSettingsBtn" class="ghost">Save settings</button>
+        </div>
+        <button id="lobbyStartBtn" type="button" class="primary">Start match</button>
+        <div class="row lobby-room-actions">
+          <button id="lobbyLeaveBtn" type="button" class="ghost">Leave room</button>
+          <button id="lobbyCloseBtn" type="button" class="danger hidden">Close room</button>
+        </div>
+      </div>
+      <section class="subcard lobby-panel" aria-label="Room chat">
+        <h3>Room chat</h3>
+        <div id="lobbyChatLog" class="chat-log" role="log" aria-live="polite"></div>
+        <form id="lobbyChatForm" class="chat-form">
+          <input id="lobbyChatInput" type="text" maxlength="280" placeholder="Message the room…" autocomplete="off" aria-label="Room chat message" />
+          <button type="submit">Send</button>
+        </form>
+      </section>
+    </div>
+  </section>
+
+  <section id="howScreen" class="setup card hidden how-screen">
+    <div class="how-hero">
+      <h2>How to Play</h2>
+      <p class="how-lead">Crossmeld is a 2–4 player tile game about building melds, completing them, and racing to go out. The goal is to score points across rounds until you reach the target score, and finish the match with the highest total.</p>
+    </div>
+
+    <div class="how-flow subcard">
+      <h3 class="how-turn-heading">On your turn</h3>
+      <div class="how-flow-step"><span class="how-flow-num">1</span><p>Draw <strong>two tiles</strong> from the stock, or take the discard pile if its top tile can be used immediately.</p></div>
+      <div class="how-flow-step"><span class="how-flow-num">2</span><p>Optionally, create new melds or add tiles to your existing melds. Only you can modify your own melds, although everyone can see them.</p></div>
+      <div class="how-flow-step"><span class="how-flow-num">3</span><p>End your turn by discarding <strong>one tile</strong>. If you legally go out by melding your last tiles, no discard is needed.</p></div>
+    </div>
+
+    <div class="how-grid">
+      <div class="how-column">
+      <article class="subcard how-panel how-panel--tiles">
+        <h3>Tile types</h3>
+        <p>There are four kinds of tiles: natural tiles, blank tiles, white tiles, and black tiles.</p>
+        <div class="how-example-list">
+          <div class="how-example">
+            <div class="how-example-copy"><strong>Natural tile</strong><span>A colored numbered tile.</span></div>
+            <div id="howNormalExample" class="how-tiles" aria-label="Natural tile examples"></div>
+          </div>
+          <div class="how-example">
+            <div class="how-example-copy"><strong>Blank tile</strong><span>Wild <strong>number</strong>. It keeps its color, but can stand for any number in that color.</span></div>
+            <div id="howBlankExample" class="how-tiles" aria-label="Blank tile examples"></div>
+          </div>
+          <div class="how-example">
+            <div class="how-example-copy"><strong>White tile</strong><span>Wild <strong>color</strong>. It keeps its number, but can stand for any color of that number.</span></div>
+            <div id="howWhiteExample" class="how-tiles" aria-label="White tile examples"></div>
+          </div>
+          <div class="how-example">
+            <div class="how-example-copy"><strong>Black tile</strong><span>Blocks discard-pile pickup while on top. Three or more black tiles can only be melded as a final going-out play.</span></div>
+            <div id="howBlackExample" class="how-tiles" aria-label="Black tile examples"></div>
+          </div>
+        </div>
+      </article>
+
+      <article class="subcard how-panel how-panel--completions">
+        <h3>Completions</h3>
+        <p>A meld is <strong>completed</strong> when it covers all six identities for its axis.</p>
+        <ul class="how-bullets">
+          <li>A <strong>number meld</strong> is completed when it contains all <strong>6 colors</strong>.</li>
+          <li>A <strong>color meld</strong> is completed when it contains all <strong>6 numbers</strong>.</li>
+          <li>A completion is <strong>natural</strong> if it uses no wilds, and <strong>mixed</strong> if it uses at least one wild.</li>
+        </ul>
+        <div class="how-example-list">
+          <div class="how-example">
+            <div class="how-example-copy"><strong>Natural completion</strong><span>All six numbers in Yellow, with no wilds.</span></div>
+            <div id="howNaturalCompletionExample" class="how-tiles" aria-label="Natural completion example"></div>
+          </div>
+          <div class="how-example">
+            <div class="how-example-copy"><strong>Mixed completion</strong><span>A completed 3s meld that uses wilds to cover missing identities.</span></div>
+            <div id="howMixedCompletionExample" class="how-tiles" aria-label="Mixed completion example"></div>
+          </div>
+        </div>
+      </article>
+
+      <article class="subcard how-panel how-panel--going-out">
+        <h3>Going out</h3>
+        <ul class="how-bullets">
+          <li>To go out, you must first have the required number of <strong>completed ordinary melds</strong>.</li>
+          <li>In a <strong>2-player</strong> game, you need <strong>2 completed ordinary melds</strong>.</li>
+          <li>In a <strong>3- or 4-player</strong> game, you need <strong>1 completed ordinary meld</strong>.</li>
+          <li>You can go out either by <strong>discarding your final tile</strong> or by <strong>melding your final tiles</strong> and ending with an empty hand.</li>
+          <li>If you made <strong>no melds on earlier turns that round</strong> and then go out on one final turn, that is a <strong>concealed going out</strong>.</li>
+        </ul>
+      </article>
+
+      <article class="subcard how-panel how-panel--scoring">
+        <h3>Scoring</h3>
+        <div class="how-score-list" role="list">
+          <div class="how-score-row" role="listitem"><span>Natural tile in a meld</span><strong>+5</strong></div>
+          <div class="how-score-row" role="listitem"><span>Special tile in a meld (blank, white, or black)</span><strong>+10</strong></div>
+          <div class="how-score-row" role="listitem"><span>Natural completion</span><strong>+100</strong></div>
+          <div class="how-score-row" role="listitem"><span>Mixed completion</span><strong>+60</strong></div>
+          <div class="how-score-row" role="listitem"><span>Going out</span><strong>+50</strong></div>
+          <div class="how-score-row" role="listitem"><span>Concealed going out</span><strong>+100</strong></div>
+          <div class="how-score-row" role="listitem"><span>Tiles left in your hand at round end</span><strong>Subtract their tile values</strong></div>
+        </div>
+        <p class="how-note">The match does not end mid-round. After each round, if at least one player has reached the target score, the game ends and the highest total wins.</p>
+      </article>
+      </div>
+      <div class="how-column">
+      <article class="subcard how-panel how-panel--melds">
+        <h3>Building melds</h3>
+        <ul class="how-bullets">
+          <li>A meld must have <strong>at least 3 tiles</strong>.</li>
+          <li>A meld is either all the <strong>same number</strong> or all the <strong>same color</strong>.</li>
+          <li>Duplicates are allowed. For example, two Red 4s can be in a 4s meld.</li>
+          <li>An ordinary meld must contain <strong>at least 2 natural tiles</strong>.</li>
+          <li>An ordinary meld can contain <strong>at most 2 wild tiles</strong>.</li>
+        </ul>
+        <div class="how-example-list">
+          <div class="how-example">
+            <div class="how-example-copy"><strong>Number meld</strong><span>All tiles share the same number.</span></div>
+            <div id="howNumberMeldExample" class="how-tiles" aria-label="Number meld example"></div>
+          </div>
+          <div class="how-example">
+            <div class="how-example-copy"><strong>Color meld</strong><span>All tiles share the same color.</span></div>
+            <div id="howColorMeldExample" class="how-tiles" aria-label="Color meld example"></div>
+          </div>
+        </div>
+      </article>
+
+      <article class="subcard how-panel how-panel--discard">
+        <h3>Taking the discard pile</h3>
+        <ul class="how-bullets">
+          <li>Taking the discard pile means taking <strong>every tile in it</strong>. You must use its <strong>top tile immediately</strong> as part of a meld.</li>
+          <li>If the pile is not frozen, you may add the top tile to <strong>one of your existing melds</strong>.</li>
+          <li>To use the top tile to start a <strong>new meld</strong>, you must already have <strong>two matching natural tiles</strong> in your hand.</li>
+          <li>If a <strong>black tile</strong> is on top, you cannot take the pile. Once another tile covers it, it no longer blocks pickup.</li>
+          <li>If a <strong>blank tile or white tile</strong> is on top, you also cannot take the pile.</li>
+          <li>A pile is <strong>frozen</strong> if it contains a <strong>blank tile or white tile anywhere</strong>, even when that wild tile is buried. It stays frozen until somebody takes it.</li>
+          <li>A <strong>frozen pile</strong> can only be taken when a <strong>natural tile is on top</strong>, by creating a <strong>new natural meld</strong> with two matching natural tiles already in your hand. You cannot use an existing meld.</li>
+        </ul>
+        <div class="how-example-list">
+          <div class="how-example">
+            <div class="how-example-copy"><strong>Ordinary discard pile</strong><span>A natural tile on top, and no wild tiles in the pile. It can be taken using an existing meld or a legal new meld.</span></div>
+            <div id="howDiscardTakeExample" class="how-pile-example" aria-label="Ordinary discard pile example"></div>
+          </div>
+          <div class="how-example">
+            <div class="how-example-copy"><strong>Blocked discard pile</strong><span>A black tile on top prevents pickup until it is covered.</span></div>
+            <div id="howBlackTopExample" class="how-pile-example" aria-label="Blocked discard pile example"></div>
+          </div>
+          <div class="how-example">
+            <div class="how-example-copy"><strong>Frozen discard pile</strong><span>A natural tile is on top, but a wild tile is buried inside. This pile can only be taken by starting a new natural meld with two matching natural tiles from your hand.</span></div>
+            <div id="howFrozenPileExample" class="how-frozen-example" aria-label="Frozen discard pile with a buried wild tile"></div>
+          </div>
+        </div>
+      </article>
+      </div>
+    </div>
+
+    <div class="row"><button type="button" id="howBackBtn" class="ghost">Back</button></div>
+  </section>
+
+  <section id="setupScreen" class="setup card hidden">
+    <h2>Local Play</h2>
+    <p class="muted">Play on one device, passing it between players.</p>
+    <div class="setup-grid">
+      <label>Players
+        <select id="playerCount">
+          <option value="2" selected>2 players — 15 tiles each</option>
+          <option value="3">3 players — 13 tiles each</option>
+          <option value="4">4 players — 11 tiles each</option>
+        </select>
+      </label>
+      <label>Game target
+        <input id="targetScore" type="number" min="100" max="10000" step="50" value="1000" />
+      </label>
+      <label>Round 1 starts
+        <select id="localFirstPlayer"><option value="random">Random</option></select>
+      </label>
+    </div>
+    <div class="row" style="margin-top:14px">
+      <button id="localBackBtn" type="button" class="ghost">Back</button>
+      <button id="startGameBtn" type="button" class="primary">Start local game</button>
+    </div>
+  </section>
+
+  <section id="gameScreen" class="hidden">
+    <header class="topbar card">
+      <div class="row between">
+        <div>
+          <div class="crossmeld-logo crossmeld-logo-compact" aria-label="Crossmeld">
+            <span class="crossmeld-mark" aria-hidden="true"><span class="logo-tile logo-tile-a"></span><span class="logo-tile logo-tile-b"></span></span>
+            <span class="crossmeld-wordmark"><span class="crossmeld-word-cross">Cross</span><span class="crossmeld-word-meld">Meld</span></span>
+          </div>
+          <div id="roundLabel" class="tiny muted"></div>
+          <div id="gameConnectionIndicator" class="connection-indicator hidden" data-connection-indicator data-state="offline" role="status" aria-label="Online server connection">
+            <span class="connection-dot" aria-hidden="true"></span><span class="connection-label">Not connected</span>
+          </div>
+        </div>
+        <div class="game-room-actions">
+          <button id="gameAbortBtn" class="danger hidden" type="button">Abort game</button>
+          <button id="newGameBtn" class="ghost" type="button">Leave room</button>
+        </div>
+      </div>
+      <div id="statusLine" class="statusline"></div>
+    </header>
+
+    <section id="roundResults" class="round-results hidden" aria-labelledby="roundResultsTitle"></section>
+
+    <section id="playersArea" class="players"></section>
+
+    <section id="tableZone" class="table-zone card">
+      <div id="stockPileCard" class="pile-card subcard interactive" role="button" tabindex="0" aria-label="Draw from stock">
+        <div>
+          <div class="small muted">Stock</div>
+          <div class="pile-stack" style="margin:6px auto 0"><div class="stock-back">×2</div></div>
+          <div id="stockCount" class="pile-count"></div>
+          <div id="stockHint" class="action-hint"></div>
+        </div>
+      </div>
+      <div id="discardPileCard" class="pile-card subcard interactive" role="button" tabindex="0" aria-label="Discard pile">
+        <div>
+          <div class="small muted">Discard pile</div>
+          <div id="discardVisual" class="pile-stack" style="margin:6px auto 0"></div>
+          <div id="discardInfo" class="pile-count"></div>
+          <div id="discardHint" class="action-hint"></div>
+        </div>
+      </div>
+    </section>
+
+
+    <section class="hand-card card">
+      <div class="hand-toolbar">
+        <div>
+          <strong id="handTitle">Your hand</strong>
+          <div id="handMeta" class="tiny muted"></div>
+        </div>
+        <button id="handExpandBtn" class="hand-expand-btn ghost" type="button" aria-expanded="false" aria-controls="hand">Show all</button>
+      </div>
+      <div id="hand" class="hand" title="Tap empty hand space to clear selection"></div>
+      <div class="hand-footer">
+        <div class="tiny muted">Tap tiles to select. Drag selected tiles onto a meld, the new-meld area, or the discard pile.</div>
+        <div class="hand-controls">
+          <button id="sortColorBtn" class="ghost">Sort by color</button>
+          <button id="sortNumberBtn" class="ghost">Sort by number</button>
+          <button id="clearSelectionBtn" class="ghost">Clear selection</button>
+        </div>
+      </div>
+    </section>
+
+    <section id="gameChatPanel" class="game-chat card hidden" aria-label="Room chat">
+      <h2>Room chat</h2>
+      <div id="gameChatLog" class="chat-log" role="log" aria-live="polite"></div>
+      <form id="gameChatForm" class="chat-form">
+        <input id="gameChatInput" type="text" maxlength="280" placeholder="Message the room…" autocomplete="off" aria-label="Room chat message" />
+        <button type="submit">Send</button>
+      </form>
+    </section>
+  </section>
+</div>
+
+<div id="modalLayer" class="modal-layer hidden" aria-live="polite">
+  <div id="modal" class="modal"></div>
+</div>
+
+<script src="../shared/tiles.js"></script>
+<script src="../shared/rules.js"></script>
+<script src="../shared/game.js"></script>
+<script src="client.js"></script>
+</body>
+</html>
