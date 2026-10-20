@@ -545,7 +545,7 @@
     .hand-toolbar > div { min-width: 0; }
     .hand-card.mobile-compact { padding: 9px 10px; }
     /* Compact phones get two rows of smaller, legible tiles instead of one
-       long horizontal strip. 15 normal starting tiles fit without swiping
+       long horizontal strip. 14 normal starting tiles fit without swiping
        on most phones; unusually large pickup hands can still scroll sideways.
        Grid order stays left-to-right across each row, just like Show all. */
     .hand-card.mobile-compact .hand {

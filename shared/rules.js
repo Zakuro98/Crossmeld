@@ -37,16 +37,35 @@
     return meldNaturalCount(tiles, type, target) >= 2 && meldWildCount(tiles) <= 2;
   }
 
-  function candidateMelds(tiles) {
+  // Under the optional no-duplicates rule each tile must have a different
+  // represented identity (color in a number meld; number in a color meld).
+  // Naturals and one kind of wild have fixed identities. The other kind of
+  // wild is flexible, and reassigns itself to a missing identity as needed.
+  function meldIdentitiesUnique(tiles, type, target) {
+    if (tiles.length > 6) return false;
+    const fixed = new Set();
+    for (const tile of tiles) {
+      if (!isCompatible(tile, type, target)) return false;
+      const identity = type === 'number'
+        ? (tile.kind === 'white' ? null : tile.color)
+        : (tile.kind === 'blank' ? null : tile.number);
+      if (identity === null) continue;
+      if (fixed.has(identity)) return false;
+      fixed.add(identity);
+    }
+    return true; // At most 6 tiles, so flexible wilds always fit remaining slots.
+  }
+
+  function candidateMelds(tiles, allowDuplicates = true) {
     if (tiles.length < 3 || tiles.some(t => t.kind === 'black')) return [];
     const out = [];
     for (let n = 1; n <= 6; n++) {
-      if (tiles.every(t => isCompatible(t, 'number', n)) && ordinaryMeldLimitsOk(tiles, 'number', n)) {
+      if (tiles.every(t => isCompatible(t, 'number', n)) && ordinaryMeldLimitsOk(tiles, 'number', n) && (allowDuplicates || meldIdentitiesUnique(tiles, 'number', n))) {
         out.push({ type: 'number', target: n });
       }
     }
     for (let c = 0; c < 6; c++) {
-      if (tiles.every(t => isCompatible(t, 'color', c)) && ordinaryMeldLimitsOk(tiles, 'color', c)) {
+      if (tiles.every(t => isCompatible(t, 'color', c)) && ordinaryMeldLimitsOk(tiles, 'color', c) && (allowDuplicates || meldIdentitiesUnique(tiles, 'color', c))) {
         out.push({ type: 'color', target: c });
       }
     }
@@ -61,7 +80,7 @@
   function completionState(meld) {
     if (meld.type === 'number') {
       const naturalColors = new Set(meld.tiles.filter(t => t.kind === 'normal' && t.number === meld.target).map(t => t.color));
-      if (naturalColors.size === 6) return 'natural';
+      if (naturalColors.size === 6 && !meld.tiles.some(isWild)) return 'natural';
       const fixed = new Set();
       let flex = 0;
       for (const t of meld.tiles) {
@@ -72,7 +91,7 @@
       return fixed.size + flex >= 6 ? 'mixed' : null;
     }
     const naturalNums = new Set(meld.tiles.filter(t => t.kind === 'normal' && t.color === meld.target).map(t => t.number));
-    if (naturalNums.size === 6) return 'natural';
+    if (naturalNums.size === 6 && !meld.tiles.some(isWild)) return 'natural';
     const fixed = new Set();
     let flex = 0;
     for (const t of meld.tiles) {
@@ -84,7 +103,15 @@
   }
 
   function updateCompletion(meld) {
-    if (meld.completion) return false;
+    // A completed natural meld can take additional tiles when duplicates are
+    // allowed. If one is a wild, its completion bonus becomes mixed (+60).
+    // Once mixed, the completion always stays mixed, even if naturals later
+    // cover all six identities. This is a reclassification, not a new completion.
+    if (meld.completion === 'mixed') return false;
+    if (meld.completion === 'natural') {
+      if (meld.tiles.some(isWild)) meld.completion = 'mixed';
+      return false;
+    }
     const status = completionState(meld);
     if (status) {
       meld.completion = status;
@@ -119,9 +146,11 @@
 
   function handPenalty(player) { return player.hand.reduce((s,t) => s + tileValue(t),0); }
 
-  function canTopAddToMeld(top, meld) {
+  function canTopAddToMeld(top, meld, allowDuplicates = true) {
     if (!isCompatible(top, meld.type, meld.target)) return false;
-    return meldWildCount([...meld.tiles, top]) <= 2;
+    const added = [...meld.tiles, top];
+    return meldWildCount(added) <= 2 &&
+      (allowDuplicates || meldIdentitiesUnique(added, meld.type, meld.target));
   }
 
   function hasFrozenNaturalPair(player, top) {
@@ -135,22 +164,22 @@
     return numberCount >= 2 || colorCount >= 2;
   }
 
-  function hasAnyNewMeldWithTop(player, top) {
+  function hasAnyNewMeldWithTop(player, top, allowDuplicates = true) {
     const naturals = player.hand.filter(t => t.kind === 'normal');
     for (let i = 0; i < naturals.length; i++) {
       for (let j = i + 1; j < naturals.length; j++) {
         const pair = [naturals[i], naturals[j]];
-        const options = candidateMelds([...pair, top]);
+        const options = candidateMelds([...pair, top], allowDuplicates);
         if (options.some(o => meldNaturalCount(pair, o.type, o.target) >= 2)) return true;
       }
     }
     return false;
   }
 
-  function selectedNewMeldOptions(selectedTiles, top, frozenOnly = false) {
+  function selectedNewMeldOptions(selectedTiles, top, frozenOnly = false, allowDuplicates = true) {
     if (selectedTiles.length < 2) return [];
     const tiles = [...selectedTiles, top];
-    let options = candidateMelds(tiles).filter(o => meldNaturalCount(selectedTiles, o.type, o.target) >= 2);
+    let options = candidateMelds(tiles, allowDuplicates).filter(o => meldNaturalCount(selectedTiles, o.type, o.target) >= 2);
     if (frozenOnly) {
       if (top.kind !== 'normal' || selectedTiles.some(t => t.kind !== 'normal')) return [];
       options = options.filter(o => tiles.every(t => isNormalForAxis(t, o.type, o.target)));
@@ -158,7 +187,7 @@
     return options;
   }
 
-  function hasAnyTakeOption(player, discard, discardFrozen, requiredCount = 1) {
+  function hasAnyTakeOption(player, discard, discardFrozen, requiredCount = 1, allowDuplicates = true) {
     if (!discard.length) return false;
     const top = discard[discard.length - 1];
     if (top.kind === 'black') return false;
@@ -172,7 +201,7 @@
 
     if (!discardFrozen) {
       for (const meld of player.melds) {
-        if (canTopAddToMeld(top, meld) &&
+        if (canTopAddToMeld(top, meld, allowDuplicates) &&
             mayFinishWith(player.hand.length + discard.length - 1,
               { ...meld, tiles: [...meld.tiles, top] })) return true;
       }
@@ -187,7 +216,7 @@
     for (let i = 0; i < naturals.length; i++) {
       for (let j = i + 1; j < naturals.length; j++) {
         const selected = [naturals[i], naturals[j]];
-        for (const option of selectedNewMeldOptions(selected, top, discardFrozen)) {
+        for (const option of selectedNewMeldOptions(selected, top, discardFrozen, allowDuplicates)) {
           const remaining = player.hand.length - 2 + discard.length - 1;
           if (mayFinishWith(remaining, { ...option, tiles: [...selected, top] })) return true;
         }
@@ -208,5 +237,5 @@
     return ids.every(id => owned.has(id));
   }
 
-  return { isCompatible, isWild, meldNaturalCount, meldWildCount, ordinaryMeldLimitsOk, candidateMelds, isNormalForAxis, completionState, updateCompletion, hasCompletedMeld, completedMeldCount, requiredCompletedMelds, canGoOut, meldName, meldTilePoints, meldBonusPoints, provisionalRoundScore, handPenalty, canTopAddToMeld, hasFrozenNaturalPair, hasAnyNewMeldWithTop, selectedNewMeldOptions, hasAnyTakeOption, wouldQualifyToGoOutWithNewMeld, handCompositionMatches };
+  return { isCompatible, isWild, meldNaturalCount, meldWildCount, ordinaryMeldLimitsOk, meldIdentitiesUnique, candidateMelds, isNormalForAxis, completionState, updateCompletion, hasCompletedMeld, completedMeldCount, requiredCompletedMelds, canGoOut, meldName, meldTilePoints, meldBonusPoints, provisionalRoundScore, handPenalty, canTopAddToMeld, hasFrozenNaturalPair, hasAnyNewMeldWithTop, selectedNewMeldOptions, hasAnyTakeOption, wouldQualifyToGoOutWithNewMeld, handCompositionMatches };
 });

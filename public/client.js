@@ -50,6 +50,7 @@
     playerCount: document.getElementById('playerCount'),
     targetScore: document.getElementById('targetScore'),
     localFirstPlayer: document.getElementById('localFirstPlayer'),
+    localAllowDuplicates: document.getElementById('localAllowDuplicates'),
     startGameBtn: document.getElementById('startGameBtn'),
     newGameBtn: document.getElementById('newGameBtn'),
     gameAbortBtn: document.getElementById('gameAbortBtn'),
@@ -189,6 +190,7 @@
   function currentPlayer() { return state.players[state.current]; }
 
   function clamp(v, min, max) { return Math.max(min, Math.min(max, v)); }
+  function tileCount(n) { return `${n} ${n === 1 ? 'tile' : 'tiles'}`; }
 
   function tileElement(tile, { button = false, mini = false, selected = false } = {}) {
     const el = document.createElement(button ? 'button' : 'div');
@@ -283,7 +285,7 @@
       stack.append(tileElement(top));
       const countEl = document.createElement('div');
       countEl.className = 'pile-count';
-      countEl.textContent = `${count} tiles${status ? ` · ${status}` : ''}`;
+      countEl.textContent = `${tileCount(count)}${status ? ` · ${status}` : ''}`;
       inner.append(heading, stack, countEl);
       shell.append(inner);
       return shell;
@@ -400,7 +402,7 @@
       me.hand=[...previousHand.map(id=>{const tile=byId.get(id);byId.delete(id);return tile;}).filter(Boolean), ...byId.values()];
     } else sortHand(me,online.sort);
     const nextState={
-      round:view.round,targetScore:view.targetScore,starter:view.starterId,
+      round:view.round,targetScore:view.targetScore,allowDuplicates:view.allowDuplicates,starter:view.starterId,
       current:view.currentPlayerId,phase:view.phase,roundOver:view.roundOver,
       stock:Array(view.stockCount).fill(null),discard:structuredClone(view.discard),
       discardFrozen:view.discardFrozen,players,discardedThisTurn:false, meldedOutThisTurn:false,
@@ -600,7 +602,7 @@
     const names = Array.from({ length: count }, (_, i) => `Player ${i + 1}`);
     const requestedFirst=selectedFirstPlayer(els.localFirstPlayer);
     const firstPlayer=requestedFirst==='random'?Math.floor(Math.random()*count):requestedFirst;
-    game = new Game({ names, targetScore: target, firstPlayer });
+    game = new Game({ names, targetScore: target, firstPlayer, allowDuplicates: els.localAllowDuplicates.value === 'true' });
     state = game.state;
     ui.selected = new Set();
     ui.expandedMelds = new Set();
@@ -623,18 +625,18 @@
   }
 
   function selectedNewMeldOptions(top, frozenOnly = false) {
-    return CrossmeldRules.selectedNewMeldOptions(selectedTiles(), top, frozenOnly);
+    return CrossmeldRules.selectedNewMeldOptions(selectedTiles(), top, frozenOnly, state.allowDuplicates);
   }
 
   function hasAnyTakeOption(player) {
-    return CrossmeldRules.hasAnyTakeOption(player, state.discard, state.discardFrozen, requiredCompletedMelds(state.players.length));
+    return CrossmeldRules.hasAnyTakeOption(player, state.discard, state.discardFrozen, requiredCompletedMelds(state.players.length), state.allowDuplicates);
   }
 
   function showGameError(error) {
     if (!(error instanceof GameError)) throw error;
     const titles = {
       'meld':'Not a legal meld', 'black':'Black tiles can only be melded when going out',
-      'go-out':'You cannot go out yet', 'stranded':'No legal way to finish the turn', 'discard-required':'You must discard to end your turn', 'fit':'Those tiles do not fit',
+      'go-out':'You cannot go out yet', 'stranded':'No legal way to finish the turn', 'discard-required':'You must discard to end your turn', 'fit':'Those tiles do not fit', 'duplicates':'Duplicate identities not allowed',
       'wilds':'Too many wilds', 'pickup':'Cannot take the discard pile',
     };
     showInfo(titles[error.code] || 'Invalid action', escapeHtml(error.message));
@@ -647,7 +649,7 @@
       const p = currentPlayer();
       sortHand(p);
       ui.selected.clear();
-      setMessage(`${p.name} drew ${drawn.length} tile${drawn.length === 1 ? '' : 's'}. Meld if you want, then discard one.`);
+      setMessage(`${p.name} drew ${tileCount(drawn.length)}. Meld if you want, then discard one.`);
       render();
     } catch (error) { showGameError(error); }
   }
@@ -694,8 +696,8 @@
       } catch (error) { showGameError(error); }
       return;
     }
-    const options = candidateMelds(selected);
-    if (!options.length) return showInfo('Not a legal meld', 'A meld needs 3+ tiles sharing one number or one color, at least 2 natural tiles, and no more than 2 wilds. Black tiles can only be melded together when doing so makes you go out.');
+    const options = candidateMelds(selected, state.allowDuplicates);
+    if (!options.length) return showInfo('Not a legal meld', `A meld needs 3+ tiles sharing one number or one color, at least 2 natural tiles, and no more than 2 wilds.${state.allowDuplicates ? '' : ' Each identity must be unique (no duplicates).'} Black tiles can only be melded together when doing so makes you go out.`);
     const remaining = p.hand.length - selected.length;
     const legalOptions = options.filter(o => remaining > 1 || canGoOut(p, state.players.length,
       completionState({ ...o, tiles: selected }) ? 1 : 0));
@@ -731,7 +733,7 @@
       const { meld, completedNow, winnerId } = game.addToMeld(meldId, selected.map(t => t.id));
       ui.selected.clear();
       if (winnerId !== null) return endRound(winnerId, `${p.name} went out.`);
-      setMessage(`${p.name} added ${selected.length} tile${selected.length === 1 ? '' : 's'} to ${meldName(meld)}${completedNow ? `, completing it ${meld.completion}` : ''}.`);
+      setMessage(`${p.name} added ${tileCount(selected.length)} to ${meldName(meld)}${completedNow ? `, completing it ${meld.completion}` : ''}.`);
       render();
     } catch (error) { showGameError(error); }
   }
@@ -982,7 +984,7 @@
       const head = document.createElement('div');
       head.className = 'player-summary';
       const left = document.createElement('div');
-      left.innerHTML = `<div class="player-name">${escapeHtml(p.name)}</div><div class="scoreline"><span class="score-piece">${p.hand.length} tiles in hand</span> · <span class="score-piece">${p.totalScore} points total</span> · <span class="score-piece">${provisionalRoundScore(p)} points on table</span></div>`;
+      left.innerHTML = `<div class="player-name">${escapeHtml(p.name)}</div><div class="scoreline"><span class="score-piece">${tileCount(p.hand.length)} in hand</span> · <span class="score-piece">${p.totalScore} points total</span> · <span class="score-piece">${provisionalRoundScore(p)} points on table</span></div>`;
       const right = document.createElement('span');
       const eligible = canGoOut(p, state.players.length);
       right.className = `pill ${eligible ? 'good' : ''}`;
@@ -1179,7 +1181,10 @@
     main.className = 'meld-summary-main';
     const title = document.createElement('div');
     title.className = 'meld-title';
-    title.innerHTML = `<strong>${escapeHtml(meldName(meld))}</strong><span class="tiny muted">${meld.tiles.length} tiles</span>`;
+    // The X/6 progress already conveys the meld size when duplicates are
+    // disabled. Black going-out melds are exempt: they have no X/6 progress.
+    const showTileCount = state.allowDuplicates || meld.type === 'black';
+    title.innerHTML = `<strong>${escapeHtml(meldName(meld))}</strong>${showTileCount ? `<span class="tiny muted">${tileCount(meld.tiles.length)}</span>` : ''}`;
 
     const preview = document.createElement('div');
     preview.className = 'meld-preview';
@@ -1285,7 +1290,7 @@
     const canTake = isMyTurn() && !online.busy && state.phase === 'draw' && hasAnyTakeOption(p);
     const canDiscard = canActOnline() && state.phase === 'play' && ui.selected.size === 1;
 
-    els.stockCount.textContent = `${state.stock.length} tile${state.stock.length === 1 ? '' : 's'} remaining`;
+    els.stockCount.textContent = `${tileCount(state.stock.length)} remaining`;
     els.stockHint.textContent = canDraw ? (state.stock.length >= 2 ? 'Tap to draw 2' : 'Tap to draw the last tile') : '';
     els.stockPileCard.classList.toggle('action-ready', canDraw);
     els.stockPileCard.setAttribute('aria-disabled', canDraw ? 'false' : 'true');
@@ -1300,7 +1305,7 @@
       empty.textContent = '—';
       els.discardVisual.append(empty);
     }
-    const parts = [`${state.discard.length} tile${state.discard.length === 1 ? '' : 's'}`];
+    const parts = [tileCount(state.discard.length)];
     if (state.discardFrozen) parts.push('frozen');
     if (state.discard.length && state.discard[state.discard.length-1].kind === 'black') parts.push('blocked');
     els.discardInfo.textContent = parts.join(' · ');
@@ -1314,7 +1319,7 @@
     const p = handPlayer();
     els.handTitle.textContent = 'Your hand';
     const orderLabel = p.sort === 'manual' ? 'manual order' : `sorted by ${p.sort}`;
-    els.handMeta.textContent = `${p.hand.length} tiles · ${ui.selected.size} selected · ${orderLabel}`;
+    els.handMeta.textContent = `${tileCount(p.hand.length)} · ${ui.selected.size} selected · ${orderLabel}`;
     els.sortColorBtn.classList.toggle('primary', p.sort === 'color');
     els.sortNumberBtn.classList.toggle('primary', p.sort === 'number');
     els.clearSelectionBtn.disabled = ui.selected.size === 0;
@@ -1655,7 +1660,7 @@
     const options = [];
     if (!state.discardFrozen) {
       p.melds.forEach(m => {
-        if (!canTopAddToMeld(top,m)) return;
+        if (!canTopAddToMeld(top,m,state.allowDuplicates)) return;
         const remainingAfterPickup = p.hand.length + state.discard.length - 1;
         const newCompletion = !m.completion && !!completionState({ ...m, tiles: [...m.tiles, top] });
         if (remainingAfterPickup <= 1 && !canGoOut(p, state.players.length, newCompletion ? 1 : 0)) return;
@@ -1843,12 +1848,13 @@
       <span class="lobby-connection ${p.connected?'':'offline'}">${p.connected?'Connected':'Offline'}</span>
     </div>`).join('')+Array.from({length:lobby.playerCount-lobby.players.length},()=>'<div class="lobby-player vacant muted">Waiting for player…</div>').join('');
     const count=document.getElementById('lobbyPlayerCount'),target=document.getElementById('lobbyTargetScore');
-    const first=document.getElementById('lobbyFirstPlayer');
+    const first=document.getElementById('lobbyFirstPlayer'),duplicates=document.getElementById('lobbyAllowDuplicates');
     if(document.activeElement!==count)count.value=String(lobby.playerCount);
     if(document.activeElement!==target)target.value=String(lobby.targetScore);
     const preferred=document.activeElement===first?first.value:String(lobby.firstPlayer);
     updateFirstPlayerOptions(first,Number(count.value),preferred);
-    count.disabled=target.disabled=first.disabled=!lobby.isHost;
+    if(document.activeElement!==duplicates)duplicates.value=String(lobby.allowDuplicates);
+    count.disabled=target.disabled=first.disabled=duplicates.disabled=!lobby.isHost;
     document.getElementById('lobbySaveSettingsBtn').classList.toggle('hidden',!lobby.isHost);
     document.getElementById('lobbyCloseBtn').classList.toggle('hidden',!lobby.isHost);
     document.getElementById('lobbySettingsNote').textContent=lobby.isHost?'Only the host can change the settings.':'Room settings are controlled by the host.';
@@ -1948,7 +1954,8 @@
   document.getElementById('lobbySaveSettingsBtn').addEventListener('click',()=>onlineSend({type:'settings',
     playerCount:Number(document.getElementById('lobbyPlayerCount').value),
     targetScore:Number(document.getElementById('lobbyTargetScore').value),
-    firstPlayer:selectedFirstPlayer(document.getElementById('lobbyFirstPlayer'))}));
+    firstPlayer:selectedFirstPlayer(document.getElementById('lobbyFirstPlayer')),
+    allowDuplicates:document.getElementById('lobbyAllowDuplicates').value==='true'}));
   document.getElementById('lobbyStartBtn').addEventListener('click',()=>onlineSend({type:'startMatch'}));
   document.getElementById('lobbyLeaveBtn').addEventListener('click',requestLeaveRoom);
   document.getElementById('lobbyCloseBtn').addEventListener('click',()=>{

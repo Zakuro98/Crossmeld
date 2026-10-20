@@ -64,6 +64,7 @@
             <label>Players<select id="lobbyPlayerCount"><option value="2">2 players</option><option value="3">3 players</option><option value="4">4 players</option></select></label>
             <label>Game target<input id="lobbyTargetScore" type="number" min="100" max="10000" step="50" value="1000" /></label>
             <label>Round 1 starts<select id="lobbyFirstPlayer"><option value="random">Random</option></select></label>
+            <label>Duplicates in melds<select id="lobbyAllowDuplicates"><option value="true" selected>Allowed</option><option value="false">Not allowed</option></select></label>
           </div>
           <p class="tiny muted" id="lobbySettingsNote"></p>
           <button type="button" id="lobbySaveSettingsBtn" class="ghost">Save settings</button>
@@ -177,7 +178,7 @@
         <ul class="how-bullets">
           <li>A meld must have <strong>at least 3 tiles</strong>.</li>
           <li>A meld is either all the <strong>same number</strong> or all the <strong>same color</strong>.</li>
-          <li>Duplicates are allowed. For example, two Red 4s can be in a 4s meld.</li>
+          <li><strong>Duplicates allowed</strong> is a match setting. When off, each meld can use each identity only once (each color in a number meld, each number in a color meld). Wilds fill missing identities.</li>
           <li>An ordinary meld must contain <strong>at least 2 natural tiles</strong>.</li>
           <li>An ordinary meld can contain <strong>at most 2 wild tiles</strong>.</li>
         </ul>
@@ -231,9 +232,9 @@
     <div class="setup-grid">
       <label>Players
         <select id="playerCount">
-          <option value="2" selected>2 players — 15 tiles each</option>
-          <option value="3">3 players — 13 tiles each</option>
-          <option value="4">4 players — 11 tiles each</option>
+          <option value="2" selected>2 players — 14 tiles each</option>
+          <option value="3">3 players — 12 tiles each</option>
+          <option value="4">4 players — 10 tiles each</option>
         </select>
       </label>
       <label>Game target
@@ -241,6 +242,9 @@
       </label>
       <label>Round 1 starts
         <select id="localFirstPlayer"><option value="random">Random</option></select>
+      </label>
+      <label>Duplicates in melds
+        <select id="localAllowDuplicates"><option value="true" selected>Allowed</option><option value="false">Not allowed</option></select>
       </label>
     </div>
     <div class="row" style="margin-top:14px">

@@ -18,6 +18,7 @@
     return {
       round: s.round,
       targetScore: s.targetScore,
+      allowDuplicates: s.allowDuplicates,
       starterId: s.players[s.starter].id,
       currentPlayerId: s.players[s.current].id,
       phase: s.phase,

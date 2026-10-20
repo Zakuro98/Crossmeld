@@ -59,7 +59,7 @@
     return shuffle(deck, rng);
   }
 
-  function startingHandSize(count) { return count === 2 ? 15 : count === 3 ? 13 : 11; }
+  function startingHandSize(count) { return count === 2 ? 14 : count === 3 ? 12 : 10; }
   function tileValue(tile) { return tile.kind === 'normal' ? 5 : 10; }
   function tileAria(tile) {
     if (tile.kind === 'normal') return `${COLORS[tile.color].name} ${tile.number}`;

@@ -10,6 +10,7 @@ function cleanName(value, fallback) { return (typeof value === 'string' ? value.
 function isId(value) { return (Number.isSafeInteger(value) && value > 0) || (typeof value==='string' && /^[0-9a-f]{16}:[1-9][0-9]{0,9}$/i.test(value)); }
 function validCount(n) { return Number.isSafeInteger(n) && n >= 2 && n <= 4; }
 function validTarget(n) { return Number.isSafeInteger(n) && n >= 100 && n <= 10000; }
+function validDuplicates(value) { return typeof value === 'boolean'; }
 // A fixed starter is a zero-based seat ID; 'random' resolves only when a match begins.
 function validFirstPlayer(value, count) {
   return value === 'random' || (Number.isSafeInteger(value) && value >= 0 && value < count);
@@ -24,14 +25,15 @@ class RoomManager {
     if(room.messages.length>75)room.messages.shift();
     return entry;
   }
-  create({name, targetScore = 1000, playerCount = 2, firstPlayer = 'random'} = {}, connection) {
+  create({name, targetScore = 1000, playerCount = 2, firstPlayer = 'random', allowDuplicates = true} = {}, connection) {
     if(!validTarget(targetScore))throw new GameError('settings','Invalid target score.');
     if(!validCount(playerCount))throw new GameError('settings','Choose 2–4 players.');
     if(!validFirstPlayer(firstPlayer,playerCount))throw new GameError('settings','Choose a valid Round 1 starting player.');
+    if(!validDuplicates(allowDuplicates))throw new GameError('settings','Invalid duplicate setting.');
     let code;
     do { code=randomCode(); } while(this.rooms.has(code));
     const seat = {id:0,name:cleanName(name,'Player 1'),token:crypto.randomBytes(32).toString('hex'),connection,seen:new Map()};
-    const room={code,targetScore,playerCount,firstPlayer,seats:[seat],game:null,revision:0,results:null,reason:'',closed:false,
+    const room={code,targetScore,playerCount,firstPlayer,allowDuplicates,seats:[seat],game:null,revision:0,results:null,reason:'',closed:false,
       messages:[],messageId:0};
     this.record(room,`${seat.name} created the room.`);
     this.rooms.set(code,room);
@@ -96,15 +98,16 @@ class RoomManager {
     room.closed=true;
     this.rooms.delete(room.code);
   }
-  configure(room,seat,{playerCount,targetScore,firstPlayer=room?.firstPlayer}={}) {
+  configure(room,seat,{playerCount,targetScore,firstPlayer=room?.firstPlayer,allowDuplicates=room?.allowDuplicates}={}) {
     if(!room||room.game)throw new GameError('settings','Settings cannot be changed after the match starts.');
     if(seat!==room.seats[0])throw new GameError('host','Only the host can change settings.');
     if(!validCount(playerCount)||playerCount<room.seats.length)throw new GameError('settings','Player count must accommodate everyone already in the room (2–4).');
     if(!validTarget(targetScore))throw new GameError('settings','Target score must be 100–10000.');
     if(!validFirstPlayer(firstPlayer,playerCount))throw new GameError('settings','Choose a valid Round 1 starting player.');
-    room.playerCount=playerCount;room.targetScore=targetScore;room.firstPlayer=firstPlayer;
+    if(!validDuplicates(allowDuplicates))throw new GameError('settings','Invalid duplicate setting.');
+    room.playerCount=playerCount;room.targetScore=targetScore;room.firstPlayer=firstPlayer;room.allowDuplicates=allowDuplicates;
     const starterLabel=firstPlayer==='random'?'Random':`Player ${firstPlayer+1}`;
-    this.record(room,`Room settings: ${playerCount} players, first to ${targetScore} points, Round 1 first: ${starterLabel}.`);
+    this.record(room,`Room settings: ${playerCount} players, first to ${targetScore} points, Round 1 first: ${starterLabel}, duplicates ${allowDuplicates ? 'allowed' : 'not allowed'}.`);
   }
   start(room,seat) {
     if(!room||room.game)throw new GameError('room','This match has already started.');
@@ -112,7 +115,7 @@ class RoomManager {
     if(room.seats.length!==room.playerCount)throw new GameError('room',`Waiting for ${room.playerCount-room.seats.length} more player(s).`);
     if(room.seats.some(s=>!connected(s)))throw new GameError('room','All players must be connected to start.');
     const firstPlayer=room.firstPlayer==='random'?crypto.randomInt(room.playerCount):room.firstPlayer;
-    const game=new Game({names:room.seats.map(s=>s.name),targetScore:room.targetScore,firstPlayer,
+    const game=new Game({names:room.seats.map(s=>s.name),targetScore:room.targetScore,firstPlayer,allowDuplicates:room.allowDuplicates,
       rng:()=>crypto.randomInt(0,4294967296)/4294967296});
     game.startRound();
     room.game=game;room.revision=1;
@@ -128,7 +131,7 @@ class RoomManager {
   }
   getLobby(room,seat) {
     if(!room?.seats.includes(seat))throw new GameError('room','Not in this room.');
-    return {code:room.code,playerCount:room.playerCount,targetScore:room.targetScore,firstPlayer:room.firstPlayer,
+    return {code:room.code,playerCount:room.playerCount,targetScore:room.targetScore,firstPlayer:room.firstPlayer,allowDuplicates:room.allowDuplicates,
       seatId:seat.id,isHost:room.seats[0]===seat,started:!!room.game,
       players:room.seats.map(s=>({id:s.id,name:s.name,connected:connected(s),isHost:s===room.seats[0]})),
       messages:room.messages.slice()};
