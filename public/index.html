@@ -4,6 +4,9 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
 <title>Crossmeld</title>
+<link rel="icon" type="image/svg+xml" href="favicon.svg">
+<link rel="icon" type="image/x-icon" href="favicon.ico">
+<link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Nunito+Sans:wght@400;500;600;700;800;900;1000&display=swap" rel="stylesheet">
@@ -62,7 +65,7 @@
           <h3>Game settings</h3>
           <div class="setup-grid">
             <label>Players<select id="lobbyPlayerCount"><option value="2">2 players</option><option value="3">3 players</option><option value="4">4 players</option></select></label>
-            <label>Game target<input id="lobbyTargetScore" type="number" min="100" max="10000" step="50" value="1000" /></label>
+            <label>Game target<input id="lobbyTargetScore" type="number" min="100" max="10000" step="50" value="1500" /></label>
             <label>Round 1 starts<select id="lobbyFirstPlayer"><option value="random">Random</option></select></label>
             <label>Duplicates in melds<select id="lobbyAllowDuplicates"><option value="true" selected>Allowed</option><option value="false">Not allowed</option></select></label>
           </div>
@@ -238,7 +241,7 @@
         </select>
       </label>
       <label>Game target
-        <input id="targetScore" type="number" min="100" max="10000" step="50" value="1000" />
+        <input id="targetScore" type="number" min="100" max="10000" step="50" value="1500" />
       </label>
       <label>Round 1 starts
         <select id="localFirstPlayer"><option value="random">Random</option></select>

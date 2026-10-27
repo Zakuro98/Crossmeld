@@ -1,0 +1,48 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64" role="img" aria-label="Crossmeld: overlapping red and blue pip tiles">
+  <title>Crossmeld</title>
+  <defs>
+    <clipPath id="bg-clip"><rect x="0.75" y="0.75" width="62.5" height="62.5" rx="12"/></clipPath>
+    <filter id="tile-shadow" x="-25%" y="-25%" width="160%" height="170%">
+      <feGaussianBlur in="SourceAlpha" stdDeviation="1.2"/>
+      <feOffset dy="2.1"/>
+      <feComponentTransfer><feFuncA type="linear" slope="0.36"/></feComponentTransfer>
+      <feMerge><feMergeNode/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+  <rect x="0.75" y="0.75" width="62.5" height="62.5" rx="12" fill="#0b130e" stroke="#506344" stroke-width="1.5"/>
+  <g clip-path="url(#bg-clip)">
+    <g transform="translate(0 -5)">
+      <!-- Shift only the tile cluster slightly left for true visual centering. -->
+      <g transform="translate(-1.6 0)">
+        <g transform="rotate(-13 25.5 30.5)" filter="url(#tile-shadow)">
+          <rect x="7" y="15.2" width="37" height="37" rx="7" fill="#953242"/>
+          <rect x="7" y="12" width="37" height="37" rx="7" fill="#dd4b63"/>
+          <g fill="#fff">
+            <circle cx="16.5" cy="21.5" r="3.35"/>
+            <circle cx="25.5" cy="30.5" r="3.35"/>
+            <circle cx="34.5" cy="39.5" r="3.35"/>
+          </g>
+        </g>
+        <g transform="rotate(13 41.5 31.5)" filter="url(#tile-shadow)">
+          <rect x="23" y="16.2" width="37" height="37" rx="7" fill="#326395"/>
+          <rect x="23" y="13" width="37" height="37" rx="7" fill="#4b94dd"/>
+          <g fill="#fff">
+            <circle cx="31.6" cy="21.5" r="3.35"/>
+            <circle cx="51.4" cy="21.5" r="3.35"/>
+            <circle cx="41.5" cy="31.5" r="3.35"/>
+            <circle cx="31.6" cy="41.5" r="3.35"/>
+            <circle cx="51.4" cy="41.5" r="3.35"/>
+          </g>
+        </g>
+      </g>
+      <g>
+        <rect x="7" y="59.2" width="8.3334" height="2.7" fill="#dd4b63"/>
+        <rect x="15.3333" y="59.2" width="8.3334" height="2.7" fill="#dd834b"/>
+        <rect x="23.6667" y="59.2" width="8.3333" height="2.7" fill="#ddb84b"/>
+        <rect x="32" y="59.2" width="8.3334" height="2.7" fill="#42bd42"/>
+        <rect x="40.3333" y="59.2" width="8.3334" height="2.7" fill="#4b94dd"/>
+        <rect x="48.6667" y="59.2" width="8.3333" height="2.7" fill="#d14bdd"/>
+      </g>
+    </g>
+  </g>
+</svg>

@@ -9,6 +9,7 @@ function randomCode() { return Array.from(crypto.randomBytes(4), n => ROOM_ALPHA
 function cleanName(value, fallback) { return (typeof value === 'string' ? value.trim().slice(0,20) : '') || fallback; }
 function isId(value) { return (Number.isSafeInteger(value) && value > 0) || (typeof value==='string' && /^[0-9a-f]{16}:[1-9][0-9]{0,9}$/i.test(value)); }
 function validCount(n) { return Number.isSafeInteger(n) && n >= 2 && n <= 4; }
+function defaultTargetForCount(count) { return {2:1500,3:1250,4:1000}[count]; }
 function validTarget(n) { return Number.isSafeInteger(n) && n >= 100 && n <= 10000; }
 function validDuplicates(value) { return typeof value === 'boolean'; }
 // A fixed starter is a zero-based seat ID; 'random' resolves only when a match begins.
@@ -25,9 +26,10 @@ class RoomManager {
     if(room.messages.length>75)room.messages.shift();
     return entry;
   }
-  create({name, targetScore = 1000, playerCount = 2, firstPlayer = 'random', allowDuplicates = true} = {}, connection) {
-    if(!validTarget(targetScore))throw new GameError('settings','Invalid target score.');
+  create({name, targetScore, playerCount = 2, firstPlayer = 'random', allowDuplicates = true} = {}, connection) {
     if(!validCount(playerCount))throw new GameError('settings','Choose 2–4 players.');
+    if(targetScore===undefined)targetScore=defaultTargetForCount(playerCount);
+    if(!validTarget(targetScore))throw new GameError('settings','Invalid target score.');
     if(!validFirstPlayer(firstPlayer,playerCount))throw new GameError('settings','Choose a valid Round 1 starting player.');
     if(!validDuplicates(allowDuplicates))throw new GameError('settings','Invalid duplicate setting.');
     let code;

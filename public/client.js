@@ -44,6 +44,9 @@
     });
   }
 
+  // Starting goals are suggestions; players can enter any permitted score.
+  const DEFAULT_TARGETS = {2: 1500, 3: 1250, 4: 1000};
+
   const els = {
     setupScreen: document.getElementById('setupScreen'),
     gameScreen: document.getElementById('gameScreen'),
@@ -598,7 +601,7 @@
   // Browser-only state (selection, expansion, ordering) stays outside the game engine.
   function startGame() {
     const count = Number(els.playerCount.value);
-    const target = Math.round(clamp(Number(els.targetScore.value) || 1000, 100, 10000));
+    const target = Math.round(clamp(Number(els.targetScore.value) || DEFAULT_TARGETS[count], 100, 10000));
     const names = Array.from({ length: count }, (_, i) => `Player ${i + 1}`);
     const requestedFirst=selectedFirstPlayer(els.localFirstPlayer);
     const firstPlayer=requestedFirst==='random'?Math.floor(Math.random()*count):requestedFirst;
@@ -1948,7 +1951,12 @@
   });
   for(const [countId,firstId] of [['playerCount','localFirstPlayer'],['lobbyPlayerCount','lobbyFirstPlayer']]) {
     const count=document.getElementById(countId),first=document.getElementById(firstId);
-    count.addEventListener('change',()=>updateFirstPlayerOptions(first,Number(count.value)));
+    count.addEventListener('change',()=>{
+      const players=Number(count.value);
+      updateFirstPlayerOptions(first,players);
+      const score=document.getElementById(countId==='playerCount'?'targetScore':'lobbyTargetScore');
+      score.value=String(DEFAULT_TARGETS[players]);
+    });
     updateFirstPlayerOptions(first,Number(count.value));
   }
   document.getElementById('lobbySaveSettingsBtn').addEventListener('click',()=>onlineSend({type:'settings',
