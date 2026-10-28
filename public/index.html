@@ -25,8 +25,48 @@
       <button type="button" id="menuCreateBtn">Create Room</button>
       <button type="button" id="menuJoinBtn">Join Room</button>
       <button type="button" id="menuHowBtn" class="ghost">How to Play</button>
-      <button type="button" id="menuResumeBtn" class="ghost hidden">Resume online match</button>
+      <button type="button" id="menuSettingsBtn" class="ghost">Settings</button>
     </div>
+  </section>
+
+  <section id="settingsScreen" class="setup card settings-screen hidden" aria-labelledby="settingsTitle">
+    <h2 id="settingsTitle">Settings</h2>
+    <p class="muted">These preferences are saved in this browser, separately from your game and online room.</p>
+    <div class="settings-groups">
+      <div class="subcard settings-group">
+        <h3>Hand &amp; sorting</h3>
+        <label class="settings-toggle"><input id="settingAutoSort" type="checkbox" checked />
+          <span><strong>Automatically sort new tiles</strong><small>Use the current Color or Number sorting method when tiles enter your hand. Manual order is unchanged.</small></span>
+        </label>
+        <label class="settings-toggle"><input id="settingShowNewTileTags" type="checkbox" checked />
+          <span><strong>Show new-tile tags</strong><small>Mark newly acquired tiles with a New tag until your turn ends.</small></span>
+        </label>
+      </div>
+      <div class="subcard settings-group">
+        <h3>Accessibility</h3>
+        <label class="settings-field">Tile numbers
+          <select id="settingTileNumbers"><option value="pips">Pips (default)</option><option value="numerals">Numerals (1–6)</option></select>
+        </label>
+        <label class="settings-toggle"><input id="settingColorLabels" type="checkbox" />
+          <span><strong>Tile identification labels</strong><small>Show R, O, Y, G, B, P, W, or K (black) on all tiles, including blanks.</small></span>
+        </label>
+        <div class="settings-tile-preview" aria-label="Tile appearance preview" id="settingsTilePreview"></div>
+      </div>
+      <div class="subcard settings-group">
+        <h3>Sound alerts</h3>
+        <div class="settings-volume-row">
+          <label for="settingTurnVolume">Your turn <output id="turnVolumeValue" for="settingTurnVolume">75%</output></label>
+          <input id="settingTurnVolume" type="range" min="0" max="100" step="1" value="75" />
+          <button type="button" id="testTurnSound" class="ghost">Test turn sound</button>
+        </div>
+        <div class="settings-volume-row">
+          <label for="settingChatVolume">Chat message <output id="chatVolumeValue" for="settingChatVolume">75%</output></label>
+          <input id="settingChatVolume" type="range" min="0" max="100" step="1" value="75" />
+          <button type="button" id="testChatSound" class="ghost">Test chat sound</button>
+        </div>
+      </div>
+    </div>
+    <div class="row settings-footer"><button type="button" id="settingsBackBtn" class="ghost">Back</button></div>
   </section>
 
   <section id="onlineEntryScreen" class="setup card hidden">
@@ -258,18 +298,20 @@
 
   <section id="gameScreen" class="hidden">
     <header class="topbar card">
-      <div class="row between">
-        <div>
+      <div class="game-heading">
+        <div class="game-brand">
           <div class="crossmeld-logo crossmeld-logo-compact" aria-label="Crossmeld">
             <span class="crossmeld-mark" aria-hidden="true"><span class="logo-tile logo-tile-a"></span><span class="logo-tile logo-tile-b"></span></span>
             <span class="crossmeld-wordmark"><span class="crossmeld-word-cross">Cross</span><span class="crossmeld-word-meld">Meld</span></span>
           </div>
-          <div id="roundLabel" class="tiny muted"></div>
         </div>
         <div class="game-room-actions">
           <button id="gameAbortBtn" class="danger hidden" type="button">Abort game</button>
+          <button id="gameHowBtn" class="ghost" type="button">How to Play</button>
+          <button id="gameSettingsBtn" class="ghost" type="button">Settings</button>
           <button id="newGameBtn" class="ghost" type="button">Leave room</button>
         </div>
+        <div id="roundLabel" class="tiny muted"></div>
       </div>
       <div id="statusLine" class="statusline"></div>
     </header>
@@ -312,8 +354,10 @@
         <div class="hand-controls">
           <button id="sortColorBtn" class="ghost">Sort by color</button>
           <button id="sortNumberBtn" class="ghost">Sort by number</button>
+          <button id="sortManualBtn" class="ghost">Sort manually</button>
           <button id="clearSelectionBtn" class="ghost">Clear selection</button>
         </div>
+
       </div>
     </section>
 
@@ -329,12 +373,19 @@
       <span class="connection-dot" aria-hidden="true"></span><span class="connection-label">Not connected</span>
     </div>
   </section>
+  <footer class="diagnostics-footer">
+    <button type="button" id="copyDiagnosticsBtn" class="ghost">Copy diagnostics</button>
+    <button type="button" id="clearDiagnosticsBtn" class="ghost">Clear log</button>
+    <span id="diagnosticsStatus" class="tiny muted" role="status" aria-live="polite"></span>
+  </footer>
 </div>
 
 <div id="modalLayer" class="modal-layer hidden" aria-live="polite">
   <div id="modal" class="modal"></div>
 </div>
 
+<script src="diagnostics.js"></script>
+<script src="preferences.js"></script>
 <script src="../shared/tiles.js"></script>
 <script src="../shared/rules.js"></script>
 <script src="../shared/game.js"></script>

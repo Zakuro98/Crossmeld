@@ -5,6 +5,7 @@ const path=require('node:path');
 const os=require('node:os');
 const {WebSocketServer,WebSocket}=require('ws');
 const {RoomManager}=require('./rooms');
+const {GameError}=require('../shared/game');
 const manager=new RoomManager();
 const root=path.resolve(__dirname,'..');
 const port=Number(process.env.PORT||8001);
@@ -48,6 +49,42 @@ const heartbeatTimer=setInterval(heartbeatConnections,30_000);
 heartbeatTimer.unref?.();
 wss.on('close',()=>clearInterval(heartbeatTimer));
 const send=(ws,data)=>{if(ws?.readyState===WebSocket.OPEN)ws.send(JSON.stringify(data));};
+// Challenge the existing transport before transferring ownership of a seat.
+// A responsive old tab keeps its seat, even if another tab has copied its token.
+// A half-open socket that cannot answer a protocol ping may be replaced.
+const RESUME_PROBE_TIMEOUT_MS=2000;
+function probeExistingConnection(oldSocket,timeoutMs=RESUME_PROBE_TIMEOUT_MS){
+  if(!oldSocket || oldSocket.readyState!==WebSocket.OPEN)return Promise.resolve(false);
+  return new Promise(resolve=>{
+    let settled=false;
+    const finish=alive=>{
+      if(settled)return;
+      settled=true;clearTimeout(timer);
+      oldSocket.off('pong',onPong);oldSocket.off('close',onGone);oldSocket.off('error',onGone);
+      resolve(alive);
+    };
+    const onPong=()=>finish(true),onGone=()=>finish(false);
+    const timer=setTimeout(()=>finish(false),timeoutMs);
+    oldSocket.on('pong',onPong);oldSocket.on('close',onGone);oldSocket.on('error',onGone);
+    try{oldSocket.ping();}catch{finish(false);}
+  });
+}
+async function resumeSeat(data,ws){
+  const {seat}=manager.findReconnectSeat(data);
+  const previous=seat.connection;
+  let verifiedStaleConnection=null;
+  if(previous && previous!==ws && previous.readyState===WebSocket.OPEN){
+    const responded=await probeExistingConnection(previous);
+    if(responded && previous.readyState===WebSocket.OPEN){
+      throw new GameError('connected','This player is already connected in this room.');
+    }
+    verifiedStaleConnection=previous;
+  }
+  // The tab may have gone away while the ping challenge was pending.
+  if(ws.readyState!==WebSocket.OPEN)return null;
+  // Re-check seat ownership inside reconnect, in case another resume won a race.
+  return manager.reconnect(data,ws,{verifiedStaleConnection});
+}
 const notify=room=>{
   if(!room)return;
   for(const seat of room.seats){
@@ -62,8 +99,8 @@ wss.on('connection',ws=>{
   ws.on('pong',()=>{ws.isAlive=true;});
   // Avoid letting a network-level socket error crash the multiplayer server.
   ws.on('error',()=>{});
-  let binding=null;
-  ws.on('message',raw=>{
+  let binding=null,joining=false;
+  ws.on('message',async raw=>{
     let data;
     try{data=JSON.parse(raw.toString());if(typeof data!=='object'||data===null||Array.isArray(data))throw Error();}
     catch{send(ws,{type:'error',message:'Invalid JSON message.'});return;}
@@ -74,14 +111,29 @@ wss.on('connection',ws=>{
     }
     try{
       if(data.type==='create'||data.type==='join'||data.type==='resume'){
-        if(binding)throw new Error('Already in a room.');
-        const {room,seat}=data.type==='create'?manager.create(data,ws):data.type==='join'?manager.join(data,ws):manager.reconnect(data,ws);
-        binding={room,seat};
-        send(ws,{type:'welcome',roomCode:room.code,token:seat.token,seatId:seat.id});
-        notify(room);
+        if(binding||joining)throw new Error('Already in a room.');
+        joining=true;
+        try{
+          const result=data.type==='create'?manager.create(data,ws):data.type==='join'?manager.join(data,ws):await resumeSeat(data,ws);
+          if(!result)return;
+          const {room,seat,replacedConnection}=result;
+          binding={room,seat};
+          // Only a proven-unresponsive previous socket may be retired.
+          if(replacedConnection && replacedConnection!==ws){
+            replacedConnection.terminate?.();
+          }
+          send(ws,{type:'welcome',roomCode:room.code,token:seat.token,seatId:seat.id});
+          notify(room);
+        }finally{joining=false;}
       }else{
         if(!binding)throw new Error('Join or create a room first.');
         const {room,seat}=binding;
+        if(seat.connection!==ws){
+          binding=null;
+          send(ws,{type:'error',code:'auth',message:'This session was reconnected elsewhere.'});
+          ws.close();
+          return;
+        }
         if(room.closed || !room.seats.includes(seat)){
           binding=null;
           throw new Error('You are no longer in this room.');
@@ -93,6 +145,10 @@ wss.on('connection',ws=>{
             for(const other of room.seats)if(other!==seat)send(other.connection,{type:'state',view:manager.getView(room,other)});
             if(room.game.state.roundOver)notify(room);
           }catch(error){send(ws,{type:'rejected',actionId:data.actionId,code:error.code||'action',message:error.message,view:manager.getView(room,seat)});}
+        }else if(data.type==='handLayout'){
+          // Deliberately silent: this changes only the seat's private display
+          // preferences, not the game revision or any public state.
+          manager.saveHandLayout(room,seat,data);
         }else if(data.type==='startMatch'){
           manager.start(room,seat);notify(room);
         }else if(data.type==='settings'){
@@ -117,7 +173,7 @@ wss.on('connection',ws=>{
           if(!room.closed)notify(room);
         }else throw new Error('Unknown message type.');
       }
-    }catch(error){send(ws,{type:'error',message:error.message||'Request failed.'});}
+    }catch(error){send(ws,{type:'error',code:error.code||'request',message:error.message||'Request failed.'});}
   });
   ws.on('close',()=>{
     const disconnected=manager.disconnect(ws);
@@ -129,4 +185,4 @@ server.listen(port,'0.0.0.0',()=>{
   for(const interfaces of Object.values(os.networkInterfaces()))for(const a of interfaces??[])if(a.family==='IPv4'&&!a.internal)console.log(`Same-Wi-Fi: http://${a.address}:${port}/`);
   console.log('Private-room multiplayer, lobby and chat.');
 });
-module.exports={server,wss,manager,heartbeatConnections};
+module.exports={server,wss,manager,heartbeatConnections,probeExistingConnection};

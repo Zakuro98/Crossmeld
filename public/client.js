@@ -23,10 +23,10 @@
       kind: 'normal',
       color: tile.color,
       number: tile.number,
-    });
+    }, { logo: true });
 
-    // Keep only the logo positioning class; everything visual comes from the
-    // exact same tile classes and pip markup used by tiles in the game.
+    // Keep the regular tile colors and pip markup, irrespective of browser
+    // appearance preferences. Logos must never show numerals or color tags.
     el.className = `logo-tile ${slotClass} ${gameTile.className}`;
     el.style.cssText = gameTile.style.cssText;
     el.setAttribute('aria-label', gameTile.getAttribute('aria-label') || '');
@@ -43,6 +43,21 @@
       if (tileB) renderLogoTile(tileB, b);
     });
   }
+
+  const diagnostics = window.CrossmeldDiagnostics;
+  const preferences = window.CrossmeldPreferences;
+  const browserStorage=(()=>{try{return window.localStorage;}catch{return null;}})();
+  let prefs = preferences.load(browserStorage);
+  diagnostics.record('page-loaded', {visible:!document.hidden});
+  window.addEventListener('error', event => {
+    diagnostics.record('js-error', {errorName:event.error?.name || 'Error', errorMessage:event.message || '',
+      stack:event.error?.stack || '', line:event.lineno, column:event.colno});
+  });
+  window.addEventListener('unhandledrejection', event => {
+    const reason=event.reason;
+    diagnostics.record('unhandled-rejection', {errorName:reason?.name || 'Rejection',
+      errorMessage:reason?.message || String(reason), stack:reason?.stack || ''});
+  });
 
   // Starting goals are suggestions; players can enter any permitted score.
   const DEFAULT_TARGETS = {2: 1500, 3: 1250, 4: 1000};
@@ -71,6 +86,7 @@
     discardHint: document.getElementById('discardHint'),
     sortColorBtn: document.getElementById('sortColorBtn'),
     sortNumberBtn: document.getElementById('sortNumberBtn'),
+    sortManualBtn: document.getElementById('sortManualBtn'),
     clearSelectionBtn: document.getElementById('clearSelectionBtn'),
     handTitle: document.getElementById('handTitle'),
     handMeta: document.getElementById('handMeta'),
@@ -79,6 +95,8 @@
     handExpandBtn: document.getElementById('handExpandBtn'),
     modalLayer: document.getElementById('modalLayer'),
     modal: document.getElementById('modal'),
+    settingsScreen: document.getElementById('settingsScreen'),
+    settingsTilePreview: document.getElementById('settingsTilePreview'),
   };
 
   // GitHub Pages serves only static frontend files; Render runs online rooms.
@@ -98,7 +116,7 @@
 
 
 
-  const { COLORS, PIP_POS, tileAria, sortHand } = CrossmeldTiles;
+  const { COLORS, PIP_POS, tileAria, sortHand, reorderHandTiles, preserveHandOrder } = CrossmeldTiles;
   const {
     isCompatible, isWild, meldNaturalCount, meldWildCount, candidateMelds,
     isNormalForAxis, completionState, updateCompletion, canGoOut, requiredCompletedMelds,
@@ -118,7 +136,17 @@
     return notificationAudioContext;
   }
 
-  function playNotificationTone(notes) {
+  // A Windows-like perceptual taper: slider positions are 0–100, not
+  // percentages of raw amplitude. The old 400% gain is the new maximum.
+  // A quadratic taper is an approximation, not Windows' device-specific curve.
+  function notificationVolumeScale(volume) {
+    const position = Math.max(0,Math.min(100,Number(volume) || 0)) / 100;
+    return 4 * position * position;
+  }
+
+  function playNotificationTone(notes, volume = 100) {
+    const scale = notificationVolumeScale(volume);
+    if(scale===0)return;
     const ctx = ensureNotificationAudio();
     if (!ctx || ctx.state === 'closed') return;
     const start = ctx.currentTime + 0.01;
@@ -129,7 +157,7 @@
       oscillator.type = 'sine';
       oscillator.frequency.setValueAtTime(note.frequency, noteStart);
       gain.gain.setValueAtTime(0.0001, noteStart);
-      gain.gain.exponentialRampToValueAtTime(note.gain, noteStart + 0.012);
+      gain.gain.exponentialRampToValueAtTime(Math.max(0.0001,note.gain*scale), noteStart + 0.012);
       gain.gain.exponentialRampToValueAtTime(0.0001, noteStart + note.duration);
       oscillator.connect(gain);
       gain.connect(ctx.destination);
@@ -142,13 +170,13 @@
     playNotificationTone([
       { frequency: 523.25, delay: 0, duration: 0.14, gain: 0.085 },
       { frequency: 783.99, delay: 0.12, duration: 0.20, gain: 0.095 },
-    ]);
+    ],prefs.turnVolume);
   }
 
   function playChatNotificationSound() {
     playNotificationTone([
       { frequency: 659.25, delay: 0, duration: 0.11, gain: 0.065 },
-    ]);
+    ],prefs.chatVolume);
   }
 
   // Unlock Web Audio on the first ordinary user interaction. Browsers generally
@@ -158,22 +186,53 @@
   let game = null;
   let state = null;
   const online = {
-    active:false, socket:null, connected:false, confirmed:null, pending:[], busy:false,
+    active:false, socket:null, connected:false, confirmed:null, pending:[], pendingSince:null, busy:false,
     playerId:null, roomCode:null, token:null, nextActionId:1,
     lobby:null, messages:[], entryMode:'create', leaving:false, closing:false,
     sessionNonce:Array.from(crypto.getRandomValues(new Uint32Array(2)),n=>n.toString(16).padStart(8,'0')).join(''), sort:'color',
-    handOrder:[], waitingForFinish:false, viewRound:null, retryTimer:null, reconnecting:false,
-    pingMs:null, pingTimer:null, pingNextId:0, pingPending:new Map(),
+    handOrder:[], restoreHandLayout:false, lastLayoutSent:null,
+    waitingForFinish:false, viewRound:null, retryTimer:null, reconnecting:false,
+    pingMs:null, pingTimer:null, pingNextId:0, pingPending:new Map(), lastPongAt:null,
+    handshakePending:false, handshakeTimer:null,
     lastChatMessageId:null, awaitingResync:false, awaitingChatResync:false,
   };
   const handPlayer = () => online.active ? state.players[online.playerId] : currentPlayer();
   const isMyTurn = () => !online.active || (online.connected &&
     state && state.players[state.current]?.id === online.playerId);
+  // Safe metadata only: no tile identities or player names leave the browser.
+  let lastGateSnapshot = '';
+  function recordControlGate() {
+    if (!online.active || !state) { lastGateSnapshot = '';return; }
+    const details = {
+      round:state.round, phase:state.phase, revision:online.confirmed?.revision,
+      seat:online.playerId, turnSeat:state.current, connected:online.connected,
+      reconnecting:online.reconnecting, handshakePending:online.handshakePending,
+      socketOpen:online.socket?.readyState === WebSocket.OPEN,
+      paused:Boolean(online.confirmed?.paused), busy:online.busy,
+      waitingForFinish:online.waitingForFinish, pending:online.pending.length,
+      pendingAgeMs:online.pendingSince===null?0:Math.max(0,performance.now()-online.pendingSince),
+      ownTurn:state.current===online.playerId,
+      canAct:canActOnline(),
+      canDraw:canActOnline() && state.phase==='draw' && state.stock.length>0,
+      canMeld:canActOnline() && state.phase==='play',
+      reason:!online.connected?'disconnected':online.confirmed?.paused?'room-paused':
+        online.busy?'pending-action':online.waitingForFinish?'waiting-for-round':
+        state.current!==online.playerId?'other-player-turn':state.phase==='draw'?'draw-phase':
+        state.phase==='play'?'play-phase':state.roundOver?'round-over':'other',
+      stockCount:state.stock.length, discardCount:state.discard.length,
+    };
+    // Only log transitions; don't flood storage on every redraw or ping.
+    const stable={...details};delete stable.pendingAgeMs;
+    const signature=JSON.stringify(stable);
+    if(signature!==lastGateSnapshot){lastGateSnapshot=signature;diagnostics.record('control-gate',details);}
+  }
   const canActOnline = () => isMyTurn() && !online.leaving && !online.closing && !online.busy && !online.waitingForFinish &&
     !state?.discardedThisTurn && !online.confirmed?.paused;
 
   // UI-only state is never part of the authoritative game snapshot.
-  const ui = { selected: new Set(), expandedMelds: new Set(), message: '' };
+  const ui = { selected: new Set(), newlyAcquired: new Set(), expandedMelds: new Set(), message: '' };
+  // Browser preference shared across local hot-seat and online games on this device.
+  function autoSortForPlayer(player) { return prefs.autoSortNewTiles; }
 
   let handExpanded = false;
   function syncHandDock() {
@@ -195,9 +254,9 @@
   function clamp(v, min, max) { return Math.max(min, Math.min(max, v)); }
   function tileCount(n) { return `${n} ${n === 1 ? 'tile' : 'tiles'}`; }
 
-  function tileElement(tile, { button = false, mini = false, selected = false } = {}) {
+  function tileElement(tile, { button = false, mini = false, selected = false, newlyAcquired = false, logo = false } = {}) {
     const el = document.createElement(button ? 'button' : 'div');
-    el.className = `tile ${tile.kind}${mini ? ' tile-mini' : ''}${selected ? ' selected' : ''}`;
+    el.className = `tile ${tile.kind}${mini ? ' tile-mini' : ''}${selected ? ' selected' : ''}${newlyAcquired ? ' newly-acquired' : ''}`;
     el.setAttribute('aria-label', tileAria(tile));
     el.title = tileAria(tile);
     if (button) el.type = 'button';
@@ -219,6 +278,31 @@
         grid.append(cell);
       }
       el.append(grid);
+      if (!logo) {
+        const numeral=document.createElement('span');
+        numeral.className='tile-numeral';
+        numeral.textContent=String(tile.number);
+        numeral.setAttribute('aria-hidden','true');
+        el.append(numeral);
+      }
+    }
+    // A redundant identity marker on every tile type, including white and black.
+    const colorCode = tile.kind === 'white' ? 'W'
+      : tile.kind === 'black' ? 'K'
+      : tile.color !== null ? ['R','O','Y','G','B','P'][tile.color] : null;
+    if(!logo && colorCode !== null){
+      const code=document.createElement('span');
+      code.className='tile-color-code';
+      code.textContent=colorCode;
+      code.setAttribute('aria-hidden','true');
+      el.append(code);
+    }
+    if (newlyAcquired) {
+      const tag=document.createElement('span');
+      tag.className='tile-new-tag';
+      tag.textContent='New';
+      tag.setAttribute('aria-hidden','true');
+      el.append(tag);
     }
     return el;
   }
@@ -328,6 +412,25 @@
     frozenPile.replaceChildren(pile(buried[0], buried.length, 'frozen'), contents);
   }
 
+  function currentHandLayout() {
+    if(!online.active || !state || !Number.isSafeInteger(online.playerId) || !state.players[online.playerId])return null;
+    return {sort:online.sort,order:handPlayer().hand.map(tile=>tile.id)};
+  }
+  function handLayoutSignature(round,layout) {
+    return JSON.stringify([round,layout.sort,layout.order]);
+  }
+  function syncHandLayout() {
+    if(!online.active || !online.connected || online.handshakePending || online.pending.length ||
+       online.socket?.readyState!==WebSocket.OPEN || !online.confirmed || online.confirmed.roundOver)return;
+    const layout=currentHandLayout();
+    if(!layout)return;
+    const signature=handLayoutSignature(online.confirmed.round,layout);
+    if(signature===online.lastLayoutSent)return;
+    try{
+      online.socket.send(JSON.stringify({type:'handLayout',round:online.confirmed.round,handLayout:layout}));
+      online.lastLayoutSent=signature;
+    }catch{handleSocketLoss(online.socket,'hand-layout-send-failed');}
+  }
   function serverAction(type, args = {}, optimistic = true) {
     if (!online.active || !canActOnline()) return;
     // Hidden information is never guessed locally. A draw / discard-pile pickup
@@ -338,7 +441,9 @@
     const actionId=`${online.sessionNonce}:${online.nextActionId++}`;
     const packet={type:'action', action:type, actionId,
       expectedRevision:online.confirmed.revision+online.pending.length,
-      handBefore:before, ...args};
+      handBefore:before,
+      // Reuse gameplay packets to save presentation with no extra message.
+      handLayout:{sort:online.sort,order:before}, ...args};
     let outcome=null;
     try {
       if (optimistic) outcome=applyPredictedAction(packet);
@@ -351,12 +456,23 @@
         applyActionToGame(check,packet);
       }
     } catch(error) { showGameError(error); return; }
+    diagnostics.record('action-send', {action:type,revision:packet.expectedRevision,pending:online.pending.length});
+    if(!online.pending.length)online.pendingSince=performance.now();
     online.pending.push(packet);
     if(!optimistic) online.busy=true;
     if(outcome?.winnerId !== undefined && outcome.winnerId !== null) online.waitingForFinish=true;
     if(optimistic) {ui.selected.clear();closeModal();render();}
     else {closeModal();render();}
-    online.socket.send(JSON.stringify(packet));
+    try{
+      online.socket.send(JSON.stringify(packet));
+      // The server removes played tiles from the attached pre-action order.
+      // Record that expected post-action layout so an acknowledgement doesn't
+      // trigger a redundant standalone update. Draws/pickups still need one,
+      // because their newly received tile IDs weren't known beforehand.
+      const remainingIds=new Set(handPlayer().hand.map(t=>t.id));
+      const persistedOrder=optimistic ? packet.handLayout.order.filter(id=>remainingIds.has(id)) : before;
+      online.lastLayoutSent=handLayoutSignature(online.confirmed.round,{sort:online.sort,order:persistedOrder});
+    }catch{handleSocketLoss(online.socket,'action-send-failed');}
   }
 
   function applyActionToGame(gameInstance, action) {
@@ -379,17 +495,49 @@
 
   function receiveOnlineView(view, acknowledgedId = null) {
     if(!online.active) return;
-    if (online.confirmed && view.revision < online.confirmed.revision) return;
+    if (online.confirmed && view.revision < online.confirmed.revision) {
+      diagnostics.record('stale-state-ignored', {revision:view.revision,previousRevision:online.confirmed.revision});return;
+    }
     const notifyTurn=shouldPlayTurnChime(online.confirmed,view,online.playerId,online.awaitingResync);
     if (acknowledgedId !== null) {
       const idx=online.pending.findIndex(p=>p.actionId===acknowledgedId);
-      if(idx>=0)online.pending.splice(0,idx+1);
+      if(idx>=0){
+        online.pending.splice(0,idx+1);
+        online.pendingSince=online.pending.length?performance.now():null;
+      }
     } else {
       // Non-ack snapshots usually come from the other player's actions;
       // preserve still-pending actions if there are any.
       if (online.pending.length && view.revision > online.confirmed.revision) return;
     }
-    const previousHand=online.active && state?.players?.[online.playerId]?.hand?.filter(Boolean).map(t=>t.id) || online.handOrder;
+    const previousView=online.confirmed;
+    if(!previousView || previousView.revision!==view.revision || previousView.paused!==view.paused || previousView.phase!==view.phase)
+      diagnostics.record('state-received', {revision:view.revision,previousRevision:previousView?.revision,
+        round:view.round,phase:view.phase,turnSeat:view.currentPlayerId,paused:Boolean(view.paused),
+        pending:online.pending.length});
+    // On a fresh-page resume there is no local hand arrangement to preserve.
+    // Recover the private, server-saved arrangement before rebuilding the view.
+    const restoringLayout=!previousView && online.restoreHandLayout && view.handLayout;
+    if(restoringLayout){
+      online.sort=['color','number','manual'].includes(view.handLayout.sort)?view.handLayout.sort:'color';
+      online.handOrder=Array.isArray(view.handLayout.order)?view.handLayout.order.slice():[];
+    }
+    online.restoreHandLayout=false;
+    const previousHand=restoringLayout ? online.handOrder :
+      (online.active && state?.players?.[online.playerId]?.hand?.filter(Boolean).map(t=>t.id) || online.handOrder);
+    // Non-optimistic draws/pickups arrive with authoritative tile identities.
+    // Only compare hands across an actual draw-phase transition: never mark
+    // a newly dealt starting hand or tiles received during reconnection.
+    if(previousView && previousView.round===view.round &&
+       previousView.currentPlayerId===online.playerId && previousView.phase==='draw' &&
+       view.currentPlayerId===online.playerId && view.phase==='play' &&
+       view.lastDraw?.playerId===online.playerId){
+      const oldIds=new Set(previousView.hand.map(t=>t.id));
+      ui.newlyAcquired=new Set(view.hand.filter(t=>!oldIds.has(t.id)).map(t=>t.id));
+    }else if(!previousView || previousView.round!==view.round ||
+             view.currentPlayerId!==online.playerId || view.phase==='draw' || view.roundOver){
+      ui.newlyAcquired.clear();
+    }
     online.confirmed=view;
     online.awaitingResync=false;
     if(notifyTurn)playTurnNotificationSound();
@@ -400,9 +548,11 @@
       melds:structuredClone(p.melds),totalScore:p.totalScore,sort:p.id===online.playerId?online.sort:'color',
     }));
     const me=players[online.playerId];
-    if (online.sort==='manual') {
-      const byId=new Map(me.hand.map(t=>[t.id,t]));
-      me.hand=[...previousHand.map(id=>{const tile=byId.get(id);byId.delete(id);return tile;}).filter(Boolean), ...byId.values()];
+    // A saved layout must be restored exactly, even when sort mode is color
+    // or number and auto-sorting new tiles has been turned off.
+    if (restoringLayout || online.sort==='manual' ||
+        (!prefs.autoSortNewTiles && previousView && previousView.round===view.round)) {
+      me.hand=preserveHandOrder(me.hand,previousHand);
     } else sortHand(me,online.sort);
     const nextState={
       round:view.round,targetScore:view.targetScore,allowDuplicates:view.allowDuplicates,starter:view.starterId,
@@ -418,8 +568,11 @@
         const outcome=applyActionToGame(projection,action);
         if(outcome.winnerId!==null && outcome.winnerId!==undefined) online.waitingForFinish=true;
       } catch(error) {
+        diagnostics.record('prediction-failed', {action:action.action, errorName:error?.name || 'Error',
+          errorMessage:error?.message || ''});
         // A speculative move was made against a state that did not commit.
         online.pending.length=0;
+        online.pendingSince=null;
         online.busy=false;
         online.waitingForFinish=false;
         break;
@@ -451,6 +604,9 @@
       setRoundResultsVisible(false);
     }
     render();
+    // Reconcile newly drawn / played tiles and any rearrangement made while an
+    // action was in flight. No request or reply is needed for unchanged layouts.
+    syncHandLayout();
   }
 
   function readOnlineSession() {
@@ -468,7 +624,7 @@
   function renderConnectionIndicator() {
     const socket=online.socket;
     const isOpen=online.connected && socket?.readyState === WebSocket.OPEN;
-    const isConnecting=socket?.readyState === WebSocket.CONNECTING || online.reconnecting;
+    const isConnecting=socket?.readyState === WebSocket.CONNECTING || online.reconnecting || online.handshakePending;
     const state=isOpen?'online':isConnecting?'connecting':'offline';
     const text=isOpen?`Connected · ${online.pingMs === null?'—':online.pingMs} ms`
       :isConnecting?(online.reconnecting?'Reconnecting…':'Connecting…'):'Not connected';
@@ -477,22 +633,74 @@
       indicator.querySelector('.connection-label').textContent=text;
     });
   }
+  // The browser can keep a WebSocket in OPEN state after a network interruption.
+  // A missed application-level pong must therefore trigger recovery on its own.
+  const CONNECTION_STALE_MS=25000;
+  const ACTION_ACK_TIMEOUT_MS=15000;
+  const HANDSHAKE_TIMEOUT_MS=12000;
+  function clearHandshakeTimer() {
+    if(online.handshakeTimer!==null)clearTimeout(online.handshakeTimer);
+    online.handshakeTimer=null;
+  }
   function stopLatencyPings() {
     if(online.pingTimer!==null)clearInterval(online.pingTimer);
     online.pingTimer=null;
     online.pingPending.clear();
     online.pingMs=null;
+    online.lastPongAt=null;
     renderConnectionIndicator();
+  }
+  function handleSocketLoss(ws, reason='socket-closed') {
+    if(online.socket!==ws)return;
+    diagnostics.record('socket-lost', {reason, connected:online.connected,
+      pending:online.pending.length, pendingAgeMs:online.pendingSince===null?0:performance.now()-online.pendingSince,
+      revision:online.confirmed?.revision,phase:state?.phase,paused:Boolean(online.confirmed?.paused)});
+    // Detach first: an eventual close from this old socket must not interfere
+    // with the new connection, even if the old socket never finished closing.
+    online.socket=null;
+    clearHandshakeTimer();
+    online.handshakePending=false;
+    stopLatencyPings();
+    if(online.leaving || online.closing){resetOnline();return;}
+    online.connected=false;
+    online.reconnecting=Boolean(online.roomCode && online.token);
+    online.awaitingResync=online.reconnecting;
+    online.awaitingChatResync=online.reconnecting;
+    online.pending.length=0;
+    online.pendingSince=null;
+    online.busy=true;
+    online.waitingForFinish=false;
+    renderConnectionIndicator();
+    if(state)render();
+    else if(online.lobby)document.getElementById('lobbySettingsNote').textContent='Connection lost. Trying to reconnect…';
+    else showOnlineWaiting(online.reconnecting?'Connection lost. Trying to reconnect…':'Connection failed. Check your connection and try again.');
+    // Browser close() may not emit a close event on a half-open connection.
+    // Do not wait for it before starting a fresh authenticated socket.
+    try{if(ws.readyState===WebSocket.OPEN || ws.readyState===WebSocket.CONNECTING)ws.close();}catch{}
+    if(online.reconnecting && !online.retryTimer){
+      online.retryTimer=setTimeout(()=>{online.retryTimer=null;beginOnline('resume');},1800);
+    }else if(!online.reconnecting)online.active=false;
   }
   function sendLatencyPing(ws) {
     if(online.socket!==ws || ws.readyState!==WebSocket.OPEN)return;
+    const now=performance.now();
+    if((online.lastPongAt!==null && now-online.lastPongAt>CONNECTION_STALE_MS) ||
+       (online.pending.length && online.pendingSince!==null && now-online.pendingSince>ACTION_ACK_TIMEOUT_MS)){
+      diagnostics.record('connection-timeout', {reason:online.pending.length && online.pendingSince!==null &&
+        now-online.pendingSince>ACTION_ACK_TIMEOUT_MS?'ack-timeout':'pong-timeout',
+        pending:online.pending.length,pendingAgeMs:online.pendingSince===null?0:now-online.pendingSince});
+      handleSocketLoss(ws,'connection-timeout');
+      return;
+    }
     const id=++online.pingNextId;
-    online.pingPending.set(id,performance.now());
-    while(online.pingPending.size>4)online.pingPending.delete(online.pingPending.keys().next().value);
-    ws.send(JSON.stringify({type:'latency_ping',id}));
+    online.pingPending.set(id,now);
+    while(online.pingPending.size>6)online.pingPending.delete(online.pingPending.keys().next().value);
+    try{ws.send(JSON.stringify({type:'latency_ping',id}));}
+    catch{handleSocketLoss(ws);}
   }
   function startLatencyPings(ws) {
     stopLatencyPings();
+    online.lastPongAt=performance.now();
     sendLatencyPing(ws);
     online.pingTimer=setInterval(()=>sendLatencyPing(ws),5000);
   }
@@ -500,7 +708,9 @@
     const sentAt=online.pingPending.get(message.id);
     if(sentAt===undefined)return;
     online.pingPending.delete(message.id);
+    online.lastPongAt=performance.now();
     online.pingMs=Math.max(0,Math.round(performance.now()-sentAt));
+    if(online.pingMs>1500)diagnostics.record('slow-ping', {latencyMs:online.pingMs});
     renderConnectionIndicator();
   }
   function showOnlineWaiting(text) {
@@ -520,37 +730,57 @@
     return select.value==='random'?'random':Number(select.value);
   }
   function beginOnline(kind, code='') {
+    // Never interrupt a healthy socket (or an active handshake) just because
+    // another resume was requested. In particular, keep its ping watchdog.
+    if(kind==='resume' && online.socket && (online.connected || online.handshakePending))return;
+    diagnostics.record('connect-attempt', {reason:kind, connected:online.connected, reconnecting:online.reconnecting});
     const url=onlineSocketURL();
     if(!url)return showInfo('Online play requires a server',
       'Use the published website or run npm install and npm run online locally. Local Play still works directly from disk.');
     stopLatencyPings();
-    if(online.socket && online.socket.readyState===WebSocket.OPEN)online.socket.close();
+    if(kind!=='resume'){online.roomCode=null;online.token=null;}
+    if(online.socket && online.socket.readyState!==WebSocket.CLOSED)online.socket.close();
     online.active=true;
     const name=document.getElementById('onlineName').value.trim().slice(0,20);
     if(kind!=='resume' && !name)return showOnlineWaiting('Please enter a username.');
     online.connected=false;
+    online.lastLayoutSent=null;
+    online.handshakePending=true;
     online.reconnecting=kind==='resume';
     online.awaitingResync=kind==='resume';
+    online.restoreHandLayout=kind==='resume' && !online.confirmed;
     online.awaitingChatResync=kind==='resume';
     if(kind!=='resume')online.lastChatMessageId=null;
     const ws=new WebSocket(url);
     online.socket=ws;
     renderConnectionIndicator();
     showOnlineWaiting(kind==='create'?'Creating online match…':kind==='resume'?'Reconnecting…':'Joining match…');
+    clearHandshakeTimer();
+    online.handshakeTimer=setTimeout(()=>handleSocketLoss(ws,'handshake-timeout'),HANDSHAKE_TIMEOUT_MS);
     ws.addEventListener('open',()=>{
-      online.connected=true;
-      online.reconnecting=false;
+      if(online.socket!==ws)return;
+      diagnostics.record('socket-open', {reason:kind});
+      // OPEN means the transport connected, NOT that the seat was restored.
+      // Do not enable gameplay until the server returns its welcome message.
       renderConnectionIndicator();
       startLatencyPings(ws);
       if(kind==='resume')onlineSend({type:'resume',code:online.roomCode,token:online.token});
       else onlineSend(kind==='create'?{type:'create',name}:{type:'join',name,code:code.trim().toUpperCase()});
     });
     ws.addEventListener('message',event=>{
-      let msg;try{msg=JSON.parse(event.data);}catch{return;}
+      let msg;try{msg=JSON.parse(event.data);}catch{
+        diagnostics.record('invalid-server-json');return;
+      }
       // Ignore late events from sockets we have already detached from.
       if(online.socket!==ws)return;
       if(msg.type==='latency_pong'){receiveLatencyPong(msg);return;}
       if(msg.type==='welcome'){
+        diagnostics.record('session-restored', {reason:kind,seat:msg.seatId});
+        clearHandshakeTimer();
+        online.handshakePending=false;
+        online.connected=true;
+        online.reconnecting=false;
+        renderConnectionIndicator();
         if(online.roomCode && online.roomCode!==msg.roomCode)online.lastChatMessageId=null;
         online.roomCode=msg.roomCode;
         online.token=msg.token;
@@ -569,35 +799,69 @@
       }else if(msg.type==='state'){
         receiveOnlineView(msg.view);
       }else if(msg.type==='ack'){
+        const action=online.pending.find(p=>p.actionId===msg.id);
+        diagnostics.record('action-ack', {action:action?.action || 'unknown',
+          revision:msg.view?.revision,pending:online.pending.length,
+          pendingAgeMs:online.pendingSince===null?0:performance.now()-online.pendingSince});
         receiveOnlineView(msg.view,msg.id);
       }else if(msg.type==='rejected'){
-        online.pending.length=0;online.busy=false;online.waitingForFinish=false;
+        diagnostics.record('action-rejected', {reason:msg.code || 'unknown', revision:msg.view?.revision,
+          pending:online.pending.length});
+        online.pending.length=0;online.pendingSince=null;online.busy=false;online.waitingForFinish=false;
+        online.lastLayoutSent=null;
         receiveOnlineView(msg.view);
         showInfo('Move rejected',escapeHtml(msg.message||'The server could not accept that action.'));
       }else if(msg.type==='error'){
+        diagnostics.record('server-error', {reason:msg.code || 'request',handshakePending:online.handshakePending});
+        // A WebSocket can be open even when the server rejected the resume,
+        // join, or creation request. Do not treat this as a usable session.
+        if(online.handshakePending){
+          clearHandshakeTimer();
+          online.handshakePending=false;
+          online.connected=false;
+          online.reconnecting=false;
+          online.active=false;
+          online.busy=false;
+          online.socket=null;
+          stopLatencyPings();
+          renderConnectionIndicator();
+          try{ws.close();}catch{}
+          if(kind==='resume')showInfo('Could not reconnect',escapeHtml(msg.message));
+          else showOnlineWaiting(`Online error: ${msg.message}`);
+          return;
+        }
         online.leaving=false;online.closing=false;
         if(!online.lobby && !state)showOnlineWaiting(`Online error: ${msg.message}`);
         else showInfo('Online error',escapeHtml(msg.message));
       }
     });
-    ws.addEventListener('close',()=>{
-      if(online.socket!==ws)return;
-      stopLatencyPings();
-      if(online.leaving || online.closing){resetOnline();return;}
-      online.connected=false;
-      online.reconnecting=Boolean(online.roomCode && online.token);
-      renderConnectionIndicator();
-      online.pending.length=0;online.busy=true;
-      online.waitingForFinish=false;
-      if(state)render();
-      else if(online.lobby)document.getElementById('lobbySettingsNote').textContent='Connection lost. Trying to reconnect…';
-      else showOnlineWaiting('Connection lost. Trying to reconnect…');
-      if(online.roomCode && online.token && !online.retryTimer){
-        online.retryTimer=setTimeout(()=>{online.retryTimer=null;beginOnline('resume');},1800);
-      }else if(!online.roomCode){online.active=false;showOnlineWaiting('Connection failed. Check that the online server is running, then try again.');}
+    ws.addEventListener('close',event=>{
+      diagnostics.record('socket-close', {codeNumber:event.code});
+      handleSocketLoss(ws,'socket-close');
     });
-    ws.addEventListener('error',()=>{if(online.socket===ws && !online.connected)renderConnectionIndicator();});
+    ws.addEventListener('error',()=>{
+      if(online.socket===ws){
+        diagnostics.record('socket-error', {connected:online.connected});
+        if(!online.connected)renderConnectionIndicator();
+      }
+    });
   }
+  document.addEventListener('visibilitychange',()=>{
+    diagnostics.record('page-visibility', {visible:!document.hidden});
+    if(!document.hidden && online.active && online.socket?.readyState===WebSocket.OPEN){
+      sendLatencyPing(online.socket);
+    }
+  });
+  window.addEventListener('offline',()=>diagnostics.record('network-offline'));
+  window.addEventListener('online',()=>{
+    diagnostics.record('network-online');
+    if(online.active && online.socket?.readyState===WebSocket.OPEN)sendLatencyPing(online.socket);
+    else if(online.active && online.reconnecting && online.roomCode && online.token){
+      if(online.retryTimer)clearTimeout(online.retryTimer);
+      online.retryTimer=null;
+      beginOnline('resume');
+    }
+  });
   // Browser-only state (selection, expansion, ordering) stays outside the game engine.
   function startGame() {
     const count = Number(els.playerCount.value);
@@ -608,6 +872,7 @@
     game = new Game({ names, targetScore: target, firstPlayer, allowDuplicates: els.localAllowDuplicates.value === 'true' });
     state = game.state;
     ui.selected = new Set();
+    ui.newlyAcquired.clear();
     ui.expandedMelds = new Set();
     state.players.forEach(p => { p.sort = 'color'; });
     showScreen('gameScreen');
@@ -618,6 +883,7 @@
   function startRound(firstRound = false, nextRound = false) {
     if (nextRound) game.nextRound(); else game.startRound();
     ui.selected.clear();
+    ui.newlyAcquired.clear();
     ui.expandedMelds.clear();
     sortAllHands();
     setRoundResultsVisible(false);
@@ -649,8 +915,9 @@
     if(online.active)return serverAction('drawStock',{},false);
     try {
       const { drawn } = game.drawStock();
+      ui.newlyAcquired=new Set(drawn.map(tile=>tile.id));
       const p = currentPlayer();
-      sortHand(p);
+      if(autoSortForPlayer(p))sortHand(p);
       ui.selected.clear();
       setMessage(`${p.name} drew ${tileCount(drawn.length)}. Meld if you want, then discard one.`);
       render();
@@ -661,8 +928,9 @@
     if(online.active)return serverAction('takePileExisting',{meldId},false);
     try {
       const p = currentPlayer();
-      const { meld, completedNow, winnerId } = game.takePileExisting(meldId);
-      sortHand(p);
+      const { meld, completedNow, winnerId, received } = game.takePileExisting(meldId);
+      ui.newlyAcquired=new Set(received.map(tile=>tile.id));
+      if(autoSortForPlayer(p))sortHand(p);
       ui.selected.clear();
       closeModal();
       if (winnerId !== null) return endRound(winnerId, `${p.name} went out by taking the discard pile.`);
@@ -675,8 +943,9 @@
     if(online.active)return serverAction('takePileNew',{tileIds:selectedTiles().map(t=>t.id),option},false);
     try {
       const p = currentPlayer();
-      const { meld, winnerId } = game.takePileNew(selectedTiles().map(t => t.id), option);
-      sortHand(p);
+      const { meld, winnerId, received } = game.takePileNew(selectedTiles().map(t => t.id), option);
+      ui.newlyAcquired=new Set(received.map(tile=>tile.id));
+      if(autoSortForPlayer(p))sortHand(p);
       ui.selected.clear();
       closeModal();
       if (winnerId !== null) return endRound(winnerId, `${p.name} took the discard pile, completed the play, and went out.`);
@@ -758,6 +1027,7 @@
   function advanceTurn() {
     const { roundEnds } = game.advanceTurn();
     ui.selected.clear();
+    ui.newlyAcquired.clear();
     render();
     const p = currentPlayer();
     if (roundEnds) return endRound(null, `The stock is empty and ${p.name} cannot legally take the discard pile.`);
@@ -935,6 +1205,7 @@
     if (state.roundOver) return;
     const { results, reached, winners } = game.finishRound(winnerId);
     ui.selected.clear();
+    ui.newlyAcquired.clear();
     stopHandMomentum();
     setRoundResultsVisible(true);
     renderRoundResults(results, reached, winners, winnerId, reason, game.state.roundHistory);
@@ -946,6 +1217,7 @@
 
   function render() {
     if (!state) return;
+    recordControlGate();
     const host=online.active && online.confirmed?.isHost;
     document.querySelector('.topbar').classList.toggle('host-controls',!!host);
     els.gameAbortBtn.classList.toggle('hidden',online.active && !host);
@@ -1292,9 +1564,14 @@
     const canDraw = isMyTurn() && !online.busy && state.phase === 'draw' && state.stock.length > 0;
     const canTake = isMyTurn() && !online.busy && state.phase === 'draw' && hasAnyTakeOption(p);
     const canDiscard = canActOnline() && state.phase === 'play' && ui.selected.size === 1;
+    const lastDraw=online.active && !isMyTurn() && state.phase==='play' &&
+      online.confirmed?.lastDraw?.playerId===state.current ? online.confirmed.lastDraw : null;
+    const drawerName=lastDraw ? state.players[lastDraw.playerId]?.name : null;
 
     els.stockCount.textContent = `${tileCount(state.stock.length)} remaining`;
-    els.stockHint.textContent = canDraw ? (state.stock.length >= 2 ? 'Tap to draw 2' : 'Tap to draw the last tile') : '';
+    els.stockHint.textContent = canDraw ? (state.stock.length >= 2 ? 'Tap to draw 2' : 'Tap to draw the last tile')
+      : lastDraw?.source==='stock' ? `${drawerName} drew ${tileCount(lastDraw.count)}` : '';
+    els.stockPileCard.classList.toggle('opponent-drew',lastDraw?.source==='stock');
     els.stockPileCard.classList.toggle('action-ready', canDraw);
     els.stockPileCard.setAttribute('aria-disabled', canDraw ? 'false' : 'true');
 
@@ -1312,7 +1589,9 @@
     if (state.discardFrozen) parts.push('frozen');
     if (state.discard.length && state.discard[state.discard.length-1].kind === 'black') parts.push('blocked');
     els.discardInfo.textContent = parts.join(' · ');
-    els.discardHint.textContent = canTake ? 'Tap to take the pile' : canDiscard ? 'Tap or drop here to discard selected tile' : '';
+    els.discardHint.textContent = canTake ? 'Tap to take the pile' : canDiscard ? 'Tap or drop here to discard selected tile'
+      : lastDraw?.source==='discard' ? `${drawerName} took ${tileCount(lastDraw.count)}` : '';
+    els.discardPileCard.classList.toggle('opponent-drew',lastDraw?.source==='discard');
     els.discardPileCard.classList.toggle('action-ready', canTake || canDiscard);
     els.discardPileCard.dataset.dropAction = 'discard';
     els.discardPileCard.setAttribute('aria-disabled', (canTake || canDiscard) ? 'false' : 'true');
@@ -1325,6 +1604,7 @@
     els.handMeta.textContent = `${tileCount(p.hand.length)} · ${ui.selected.size} selected · ${orderLabel}`;
     els.sortColorBtn.classList.toggle('primary', p.sort === 'color');
     els.sortNumberBtn.classList.toggle('primary', p.sort === 'number');
+    els.sortManualBtn.classList.toggle('primary', p.sort === 'manual');
     els.clearSelectionBtn.disabled = ui.selected.size === 0;
     // Two row, left-to-right layout on phones. Only enormous hands need to
     // scroll sideways; hand composition and order remain unchanged.
@@ -1332,7 +1612,7 @@
     const previousScroll = els.hand.scrollLeft;
     els.hand.innerHTML = '';
     p.hand.forEach(tile => {
-      const btn = tileElement(tile,{button:true, selected: ui.selected.has(tile.id)});
+      const btn = tileElement(tile,{button:true, selected: ui.selected.has(tile.id), newlyAcquired: ui.newlyAcquired.has(tile.id)});
       btn.dataset.tileId = String(tile.id);
       btn.addEventListener('pointerdown', beginHandDrag);
       btn.addEventListener('click', () => {
@@ -1341,6 +1621,14 @@
       });
       els.hand.append(btn);
     });
+    // Only enable vertical clipping/scrolling for hands that truly exceed the
+    // existing height limit. A normal hand keeps overflow visible so the new
+    // tile glow is not cropped at the hand's edges.
+    els.hand.classList.remove('hand-scroll-needed');
+    if (els.hand.scrollHeight > els.hand.clientHeight + 1 ||
+        els.hand.scrollWidth > els.hand.clientWidth + 1) {
+      els.hand.classList.add('hand-scroll-needed');
+    }
     // Retain browsing position when selecting tiles; otherwise the strip jumps
     // back to the beginning after every tap in a very large hand.
     els.hand.scrollLeft = previousScroll;
@@ -1507,7 +1795,9 @@
     if (!handDrag.active && Math.hypot(dx,dy) < 8) return;
     if (!handDrag.active) {
       handDrag.active = true;
-      handDrag.source.classList.add('drag-source');
+      document.querySelectorAll('#hand .tile[data-tile-id]').forEach(el => {
+        if(handDrag.draggedTileIds.includes(Number(el.dataset.tileId))) el.classList.add('drag-source');
+      });
       handDrag.ghost = buildDragGhost(handDrag.draggedTileIds);
       document.body.append(handDrag.ghost);
     }
@@ -1548,7 +1838,7 @@
 
     const target = under?.closest?.('#hand .tile[data-tile-id]');
     if (target && target !== handDrag.source) {
-      target.classList.add('drag-target');
+      if (!handDrag.draggedTileIds.includes(Number(target.dataset.tileId))) target.classList.add('drag-target');
       const r = target.getBoundingClientRect();
       handDrag.target = Number(target.dataset.tileId);
       handDrag.after = x > r.left + r.width / 2;
@@ -1601,22 +1891,13 @@
       }
     }
 
-    const from = p.hand.findIndex(t => t.id === drag.id);
-    if (from < 0) { render(); return; }
-    p.sort = 'manual';
+    if (!p.hand.some(t=>t.id===drag.id)) { render(); return; }
+    const reordered=reorderHandTiles(p.hand,drag.draggedTileIds,drag.target,drag.after);
+    // A drag always opts into manual mode, even if it doesn't move the tiles.
+    p.sort='manual';
     if(online.active)online.sort='manual';
-    const [moved] = p.hand.splice(from,1);
-    if (drag.target === null) {
-      p.hand.push(moved);
-    } else {
-      let to = p.hand.findIndex(t => t.id === drag.target);
-      if (to < 0) p.hand.push(moved);
-      else {
-        if (drag.after) to += 1;
-        p.hand.splice(to,0,moved);
-      }
-    }
-    if(online.active)online.handOrder=p.hand.map(t=>t.id);
+    p.hand=reordered;
+    if(online.active){online.handOrder=p.hand.map(t=>t.id);syncHandLayout();}
     render();
   }
 
@@ -1628,7 +1909,7 @@
   function cleanupHandDrag() {
     stopDragAutoScroll();
     if (!handDrag) return;
-    handDrag.source?.classList.remove('drag-source');
+    document.querySelectorAll('#hand .drag-source').forEach(el=>el.classList.remove('drag-source'));
     handDrag.source?.removeEventListener('pointermove', moveHandDrag);
     document.querySelectorAll('#hand .drag-target').forEach(x => x.classList.remove('drag-target'));
     document.querySelectorAll('.drop-hover').forEach(x => x.classList.remove('drop-hover'));
@@ -1733,7 +2014,7 @@
   function abortLocalGame() {
     if(!confirm('Abort this local game and return to the main menu?'))return;
     closeModal();stopHandMomentum();
-    game=null;state=null;ui.selected.clear();ui.expandedMelds.clear();
+    game=null;state=null;ui.selected.clear();ui.newlyAcquired.clear();ui.expandedMelds.clear();
     showMenu();
   }
   function requestLeaveRoom() {
@@ -1766,12 +2047,18 @@
   els.hand.addEventListener('click', e => { if (e.target === els.hand && ui.selected.size) clearSelection(); });
   els.sortColorBtn.addEventListener('click', () => {
     sortHand(handPlayer(), 'color');
-    if(online.active)online.sort='color';
+    if(online.active){online.sort='color';syncHandLayout();}
     render();
   });
   els.sortNumberBtn.addEventListener('click', () => {
     sortHand(handPlayer(), 'number');
-    if(online.active)online.sort='number';
+    if(online.active){online.sort='number';syncHandLayout();}
+    render();
+  });
+  els.sortManualBtn.addEventListener('click', () => {
+    // Keep the existing order exactly as displayed.
+    sortHand(handPlayer(),'manual');
+    if(online.active){online.sort='manual';syncHandLayout();}
     render();
   });
   els.clearSelectionBtn.addEventListener('click', clearSelection);
@@ -1782,17 +2069,98 @@
     if (e.target === els.modalLayer && els.modalLayer.dataset.dismissable === '1') closeModal();
   });
 
-  const screens=['menuScreen','setupScreen','onlineEntryScreen','lobbyScreen','howScreen','gameScreen'];
+  const screens=['menuScreen','setupScreen','onlineEntryScreen','lobbyScreen','howScreen','gameScreen','settingsScreen'];
+  let settingsReturnScreen='menuScreen';
+  let howReturnScreen='menuScreen';
   function showScreen(id) {
+    // A live online state update must not close Settings while a player is using it.
+    if(!els.settingsScreen.classList.contains('hidden') && (id==='gameScreen'||id==='lobbyScreen')) {
+      settingsReturnScreen=id;return;
+    }
+    // Preserve How to Play during live online snapshots, just like Settings.
+    if(!document.getElementById('howScreen').classList.contains('hidden') && (id==='gameScreen'||id==='lobbyScreen')) {
+      howReturnScreen=id;return;
+    }
     // State snapshots call this for every online move and lobby refresh. Only
     // reset page position when actually navigating to a different screen.
     const changingScreen=document.getElementById(id).classList.contains('hidden');
     for(const name of screens)document.getElementById(name).classList.toggle('hidden',name!==id);
+    if(changingScreen)diagnostics.record('screen-changed', {screen:id});
     if(id!=='gameScreen')document.getElementById('gameChatPanel').classList.add('hidden');
     document.getElementById('gameConnectionIndicator').classList.toggle('hidden',id!=='gameScreen'||!online.active);
     if(changingScreen)window.scrollTo(0,0);
   }
   function showMenu(){showScreen('menuScreen');}
+  function openHowToPlay(){
+    const current=screens.find(id=>!document.getElementById(id).classList.contains('hidden'))||'menuScreen';
+    howReturnScreen=current==='howScreen'?'menuScreen':current;
+    showScreen('howScreen');
+  }
+  function closeHowToPlay(){
+    const dest=howReturnScreen;
+    document.getElementById('howScreen').classList.add('hidden');
+    showScreen(dest);
+    if(dest==='gameScreen'){
+      document.getElementById('gameChatPanel').classList.toggle('hidden',!online.active);
+      if(state)render();
+    }
+    if(dest==='lobbyScreen'&&online.lobby)renderLobby(online.lobby);
+  }
+  function openSettings(){
+    const current=screens.find(id=>!document.getElementById(id).classList.contains('hidden'))||'menuScreen';
+    settingsReturnScreen=current==='settingsScreen'?'menuScreen':current;
+    showScreen('settingsScreen');
+    renderSettings();
+  }
+  function closeSettings(){
+    const dest=settingsReturnScreen;
+    els.settingsScreen.classList.add('hidden');
+    showScreen(dest);
+    if(dest==='gameScreen'&&state)render();
+    if(dest==='lobbyScreen'&&online.lobby)renderLobby(online.lobby);
+  }
+  function applyAppearancePreferences(){
+    document.body.classList.toggle('show-numerals',prefs.tileNumbers==='numerals');
+    document.body.classList.toggle('show-color-labels',prefs.colorLabels);
+    document.body.classList.toggle('show-new-tile-tags',prefs.showNewTileTags);
+  }
+  function renderSettings(){
+    const byId=id=>document.getElementById(id);
+    byId('settingAutoSort').checked=prefs.autoSortNewTiles;
+    byId('settingShowNewTileTags').checked=prefs.showNewTileTags;
+    byId('settingTileNumbers').value=prefs.tileNumbers;
+    byId('settingColorLabels').checked=prefs.colorLabels;
+    for(const [id,volume] of [['settingTurnVolume',prefs.turnVolume],['settingChatVolume',prefs.chatVolume]]){
+      const slider=byId(id);
+      slider.value=String(volume);
+      slider.style.setProperty('--range-fill',`${volume}%`);
+    }
+    byId('turnVolumeValue').textContent=prefs.turnVolume+'%';
+    byId('chatVolumeValue').textContent=prefs.chatVolume+'%';
+    const sample=[{id:'preview-red',kind:'normal',color:0,number:3},
+      {id:'preview-yellow',kind:'normal',color:2,number:6},
+      {id:'preview-blank',kind:'blank',color:4,number:null},
+      {id:'preview-white',kind:'white',color:null,number:5},
+      {id:'preview-black',kind:'black',color:null,number:null}];
+    els.settingsTilePreview.replaceChildren(...sample.map((t,i)=>tileElement(t,{newlyAcquired:i===0})));
+  }
+  function updatePreference(key,value){
+    prefs=preferences.save(browserStorage,{...prefs,[key]:value});
+    applyAppearancePreferences();
+    renderSettings();
+  }
+  applyAppearancePreferences();
+  document.getElementById('menuSettingsBtn').addEventListener('click',openSettings);
+  document.getElementById('gameSettingsBtn').addEventListener('click',openSettings);
+  document.getElementById('settingsBackBtn').addEventListener('click',closeSettings);
+  document.getElementById('settingAutoSort').addEventListener('change',e=>updatePreference('autoSortNewTiles',e.target.checked));
+  document.getElementById('settingShowNewTileTags').addEventListener('change',e=>updatePreference('showNewTileTags',e.target.checked));
+  document.getElementById('settingTileNumbers').addEventListener('change',e=>updatePreference('tileNumbers',e.target.value));
+  document.getElementById('settingColorLabels').addEventListener('change',e=>updatePreference('colorLabels',e.target.checked));
+  document.getElementById('settingTurnVolume').addEventListener('input',e=>updatePreference('turnVolume',Number(e.target.value)));
+  document.getElementById('settingChatVolume').addEventListener('input',e=>updatePreference('chatVolume',Number(e.target.value)));
+  document.getElementById('testTurnSound').addEventListener('click',playTurnNotificationSound);
+  document.getElementById('testChatSound').addEventListener('click',playChatNotificationSound);
   // Room codes are case-insensitive and contain exactly four ASCII letters/digits.
   function normalizeRoomCode(value) {
     return String(value).toUpperCase().replace(/[^A-Z0-9]/g,'').slice(0,4);
@@ -1824,6 +2192,8 @@
     online.entryMode=kind;
     // A new Create/Join screen always starts with an empty username field.
     document.getElementById('onlineName').value='';
+    document.getElementById('onlineEntryFields').classList.remove('hidden');
+    document.getElementById('onlineEntryConfirmBtn').classList.remove('hidden');
     document.getElementById('onlineEntryTitle').textContent=kind==='create'?'Create room':'Join room';
     document.getElementById('onlineEntryHelp').textContent=kind==='create'?'Make a private room, then share its four-character code.':'Enter the code your friend shared.';
     document.getElementById('entryCodeLabel').classList.toggle('hidden',kind==='create');
@@ -1835,10 +2205,10 @@
   function renderLobby(lobby) {
     // A lobby snapshot may follow a live match being aborted by the host or
     // another player leaving. Forget all gameplay predictions and private state.
-    game=null;state=null;online.confirmed=null;online.pending=[];
+    game=null;state=null;online.confirmed=null;online.pending=[];online.pendingSince=null;
     online.busy=false;online.waitingForFinish=false;online.viewRound=null;
-    online.handOrder=[];online.sort='color';
-    ui.selected.clear();ui.expandedMelds.clear();closeModal();stopHandMomentum();
+    online.handOrder=[];online.sort='color';online.restoreHandLayout=false;online.lastLayoutSent=null;
+    ui.selected.clear();ui.newlyAcquired.clear();ui.expandedMelds.clear();closeModal();stopHandMomentum();
     online.lobby=lobby;online.playerId=lobby.seatId;
     online.awaitingResync=false;
     online.roomCode=lobby.code;
@@ -1904,15 +2274,18 @@
     input.value='';
   }
   function resetOnline() {
+    diagnostics.record('online-session-reset');
     const socket=online.socket;
     online.socket=null;
+    clearHandshakeTimer();
     stopLatencyPings();
-    online.connected=false;online.reconnecting=false;online.active=false;online.confirmed=null;online.pending=[];
+    online.handshakePending=false;
+    online.connected=false;online.reconnecting=false;online.active=false;online.confirmed=null;online.pending=[];online.pendingSince=null;
     online.busy=false;online.waitingForFinish=false;online.roomCode=null;online.token=null;
     online.lobby=null;online.messages=[];online.viewRound=null;online.leaving=false;online.closing=false;
-    online.playerId=null;online.handOrder=[];online.sort='color';
+    online.playerId=null;online.handOrder=[];online.sort='color';online.restoreHandLayout=false;online.lastLayoutSent=null;
     online.lastChatMessageId=null;online.awaitingResync=false;online.awaitingChatResync=false;
-    ui.selected.clear();ui.expandedMelds.clear();closeModal();stopHandMomentum();
+    ui.selected.clear();ui.newlyAcquired.clear();ui.expandedMelds.clear();closeModal();stopHandMomentum();
     if(online.retryTimer)clearTimeout(online.retryTimer);
     online.retryTimer=null;
     clearOnlineSession();
@@ -1920,29 +2293,32 @@
     state=null;game=null;
     showMenu();
     renderConnectionIndicator();
-    document.getElementById('menuResumeBtn').classList.add('hidden');
   }
   document.getElementById('menuLocalBtn').addEventListener('click',()=>showScreen('setupScreen'));
   document.getElementById('menuCreateBtn').addEventListener('click',()=>openOnlineEntry('create'));
   document.getElementById('menuJoinBtn').addEventListener('click',()=>openOnlineEntry('join'));
-  document.getElementById('menuHowBtn').addEventListener('click',()=>showScreen('howScreen'));
-  document.getElementById('howBackBtn').addEventListener('click',showMenu);
+  document.getElementById('menuHowBtn').addEventListener('click',openHowToPlay);
+  document.getElementById('gameHowBtn').addEventListener('click',openHowToPlay);
+  document.getElementById('howBackBtn').addEventListener('click',closeHowToPlay);
   document.getElementById('localBackBtn').addEventListener('click',showMenu);
-  document.getElementById('onlineEntryBackBtn').addEventListener('click',showMenu);
+  document.getElementById('onlineEntryBackBtn').addEventListener('click',()=>{
+    // Back cancels an in-progress automatic resume rather than leaving a
+    // second socket running unseen behind the main menu. Keep the saved token.
+    if(online.reconnecting && !online.connected){
+      const socket=online.socket;online.socket=null;
+      clearHandshakeTimer();stopLatencyPings();
+      if(online.retryTimer)clearTimeout(online.retryTimer);
+      online.retryTimer=null;online.handshakePending=false;online.reconnecting=false;online.active=false;
+      try{socket?.close();}catch{}
+    }
+    showMenu();
+  });
   document.getElementById('onlineEntryConfirmBtn').addEventListener('click',()=>{
     const code=normalizeRoomCode(roomCodeField.value);
     if(online.entryMode==='join'&&!/^[A-Z0-9]{4}$/.test(code)){
       showOnlineWaiting('Please enter a valid four-character room code.');return;
     }
     beginOnline(online.entryMode,code);
-  });
-  document.getElementById('menuResumeBtn').addEventListener('click',()=>{
-    try{
-      const previous=JSON.parse(readOnlineSession());
-      if(!previous?.code||!previous?.token)throw Error();
-      online.roomCode=previous.code;online.token=previous.token;
-      showScreen('onlineEntryScreen');beginOnline('resume');
-    }catch{showInfo('No saved match','There is no saved online match in this tab.');}
   });
   document.getElementById('copyCodeBtn').addEventListener('click',async()=>{
     try{await navigator.clipboard.writeText(online.roomCode);document.getElementById('copyCodeBtn').textContent='Copied!';
@@ -1975,8 +2351,47 @@
   });
   document.getElementById('lobbyChatForm').addEventListener('submit',e=>{e.preventDefault();submitRoomChat(e.target,document.getElementById('lobbyChatInput'));});
   document.getElementById('gameChatForm').addEventListener('submit',e=>{e.preventDefault();submitRoomChat(e.target,document.getElementById('gameChatInput'));});
-  if(readOnlineSession())document.getElementById('menuResumeBtn').classList.remove('hidden');
+  // A saved session from this tab automatically resumes on page load.
+  // No title-screen reconnect button and no attempt without a valid token.
+  function autoResumeSavedSession(){
+    const saved=readOnlineSession();
+    if(!saved)return;
+    try{
+      const previous=JSON.parse(saved);
+      if(!/^[A-Z0-9]{4}$/.test(previous?.code)||!/^[0-9a-f]{64}$/i.test(previous?.token))throw Error();
+      online.roomCode=previous.code;online.token=previous.token;
+      document.getElementById('onlineEntryTitle').textContent='Reconnecting to room';
+      document.getElementById('onlineEntryHelp').textContent='Restoring your previous online session…';
+      document.getElementById('onlineEntryFields').classList.add('hidden');
+      document.getElementById('onlineEntryConfirmBtn').classList.add('hidden');
+      showScreen('onlineEntryScreen');
+      beginOnline('resume');
+    }catch{clearOnlineSession();}
+  }
+  const diagnosticsStatus=document.getElementById('diagnosticsStatus');
+  document.getElementById('copyDiagnosticsBtn').addEventListener('click',async()=>{
+    const text=diagnostics.report();
+    try {
+      if(!navigator.clipboard?.writeText)throw Error('Clipboard API unavailable');
+      await navigator.clipboard.writeText(text);
+      diagnosticsStatus.textContent='Diagnostics copied. You can paste them into the chat.';
+    } catch {
+      // Mobile browsers without Clipboard API can manually select this text.
+      showCustomModal('Copy diagnostics', '<p class="muted">Select and copy the report below.</p>',
+        [{label:'Close',className:'primary',action:closeModal}],true);
+      const area=document.createElement('textarea');area.className='diagnostics-fallback';
+      area.readOnly=true;area.value=text;area.setAttribute('aria-label','Diagnostic report');
+      els.modal.insertBefore(area,els.modal.lastElementChild);
+      area.focus();area.select();
+      diagnosticsStatus.textContent='Report displayed for manual copying.';
+    }
+  });
+  document.getElementById('clearDiagnosticsBtn').addEventListener('click',()=>{
+    diagnostics.clear();
+    diagnosticsStatus.textContent='Diagnostic history cleared.';
+  });
   initializeCrossmeldLogos();
   initializeHowToPlayExamples();
   renderConnectionIndicator();
+  autoResumeSavedSession();
 })();

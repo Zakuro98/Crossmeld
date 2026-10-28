@@ -7,11 +7,22 @@ const {playerView, publicRoundResults} = require('../shared/view');
 const ROOM_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 function randomCode() { return Array.from(crypto.randomBytes(4), n => ROOM_ALPHABET[n % ROOM_ALPHABET.length]).join(''); }
 function cleanName(value, fallback) { return (typeof value === 'string' ? value.trim().slice(0,20) : '') || fallback; }
+// Compare the final display names, including trimmed/truncated names and Unicode variants.
+function nameKey(value) { return value.normalize('NFKC').toLowerCase(); }
 function isId(value) { return (Number.isSafeInteger(value) && value > 0) || (typeof value==='string' && /^[0-9a-f]{16}:[1-9][0-9]{0,9}$/i.test(value)); }
 function validCount(n) { return Number.isSafeInteger(n) && n >= 2 && n <= 4; }
 function defaultTargetForCount(count) { return {2:1500,3:1250,4:1000}[count]; }
 function validTarget(n) { return Number.isSafeInteger(n) && n >= 100 && n <= 10000; }
 function validDuplicates(value) { return typeof value === 'boolean'; }
+// Presentation-only information. Reject malformed or incomplete lists rather
+// than allowing a client to persist a layout containing nonexistent tile IDs.
+function normalizeHandLayout(layout, hand) {
+  if (!layout || !['color','number','manual'].includes(layout.sort) || !Array.isArray(layout.order)) return null;
+  if (layout.order.length !== hand.length) return null;
+  const ids = new Set(hand.map(tile => tile.id));
+  if (new Set(layout.order).size !== ids.size || layout.order.some(id => !Number.isSafeInteger(id) || !ids.has(id))) return null;
+  return {sort:layout.sort, order:[...layout.order]};
+}
 // A fixed starter is a zero-based seat ID; 'random' resolves only when a match begins.
 function validFirstPlayer(value, count) {
   return value === 'random' || (Number.isSafeInteger(value) && value >= 0 && value < count);
@@ -34,9 +45,9 @@ class RoomManager {
     if(!validDuplicates(allowDuplicates))throw new GameError('settings','Invalid duplicate setting.');
     let code;
     do { code=randomCode(); } while(this.rooms.has(code));
-    const seat = {id:0,name:cleanName(name,'Player 1'),token:crypto.randomBytes(32).toString('hex'),connection,seen:new Map()};
+    const seat = {id:0,name:cleanName(name,'Player 1'),token:crypto.randomBytes(32).toString('hex'),connection,seen:new Map(),handLayout:null};
     const room={code,targetScore,playerCount,firstPlayer,allowDuplicates,seats:[seat],game:null,revision:0,results:null,reason:'',closed:false,
-      messages:[],messageId:0};
+      messages:[],messageId:0,lastDraw:null};
     this.record(room,`${seat.name} created the room.`);
     this.rooms.set(code,room);
     return {room,seat};
@@ -46,19 +57,33 @@ class RoomManager {
     if(!room||room.closed)throw new GameError('room','Room not found.');
     if(room.game)throw new GameError('room','This match has already started.');
     if(room.seats.length>=room.playerCount)throw new GameError('room','This room is full.');
-    const seat={id:room.seats.length,name:cleanName(name,`Player ${room.seats.length+1}`),token:crypto.randomBytes(32).toString('hex'),connection,seen:new Map()};
+    const joinName=cleanName(name,`Player ${room.seats.length+1}`);
+    if(room.seats.some(s=>nameKey(s.name)===nameKey(joinName))){
+      throw new GameError('name','That username is already taken in this room.');
+    }
+    const seat={id:room.seats.length,name:joinName,token:crypto.randomBytes(32).toString('hex'),connection,seen:new Map(),handLayout:null};
     room.seats.push(seat);
     this.record(room,`${seat.name} joined the room.`);
     return {room,seat};
   }
-  reconnect({code,token}={},connection) {
+  findReconnectSeat({code,token}={}) {
     const room=this.rooms.get(String(code||'').trim().toUpperCase());
     const seat=room?.seats.find(s=>typeof token==='string' && /^[0-9a-f]{64}$/i.test(token) && crypto.timingSafeEqual(Buffer.from(s.token,'hex'),Buffer.from(token,'hex')));
     if(!room||room.closed||!seat)throw new GameError('auth','Unable to reconnect to that seat.');
-    if(connected(seat) && seat.connection!==connection)throw new GameError('auth','This seat is already connected.');
+    return {room,seat};
+  }
+  reconnect(data={},connection,{verifiedStaleConnection=null}={}) {
+    const {room,seat}=this.findReconnectSeat(data);
+    if(seat.connection===connection)throw new GameError('connected','This session is already connected.');
+    // A token alone must not kick a currently connected player. The server
+    // may explicitly supply an old socket only after its live ping probe fails.
+    if(connected(seat) && seat.connection!==verifiedStaleConnection){
+      throw new GameError('connected','This player is already connected in this room.');
+    }
+    const replacedConnection=seat.connection;
     seat.connection=connection;
     this.record(room,`${seat.name} reconnected.`);
-    return {room,seat};
+    return {room,seat,replacedConnection};
   }
   disconnect(connection) {
     for(const room of this.rooms.values())for(const seat of room.seats){
@@ -72,7 +97,8 @@ class RoomManager {
     room.revision=0;
     room.results=null;
     room.reason='';
-    for(const member of room.seats)member.seen.clear();
+    room.lastDraw=null;
+    for(const member of room.seats){member.seen.clear();member.handLayout=null;}
   }
   leave(room,seat) {
     if(!room || room.closed || !room.seats.includes(seat))throw new GameError('room','Not in this room.');
@@ -120,7 +146,8 @@ class RoomManager {
     const game=new Game({names:room.seats.map(s=>s.name),targetScore:room.targetScore,firstPlayer,allowDuplicates:room.allowDuplicates,
       rng:()=>crypto.randomInt(0,4294967296)/4294967296});
     game.startRound();
-    room.game=game;room.revision=1;
+    room.game=game;room.revision=1;room.lastDraw=null;
+    for(const member of room.seats)member.handLayout=null;
     this.record(room,`The match has started. ${room.seats[firstPlayer].name} goes first in Round 1.`);
   }
   chat(room,seat,text) {
@@ -142,7 +169,23 @@ class RoomManager {
     if(!room.game)throw new GameError('room','Match has not started.');
     return {...playerView(room.game,seat.id),revision:room.revision,
       nextMeldId:room.game.nextMeldId,roomCode:room.code,isHost:room.seats[0]===seat,
-      results:room.results,resultReason:room.reason,paused:room.seats.some(s=>!connected(s))};
+      results:room.results,resultReason:room.reason,paused:room.seats.some(s=>!connected(s)),
+      lastDraw:room.lastDraw,
+      // Only the owner receives their saved layout. Never publish other hands'
+      // tile IDs or arrangements through the player list or lobby.
+      handLayout:{sort:seat.handLayout?.sort || 'color',
+        order:seat.handLayout?.round===room.game.state.round ? [...seat.handLayout.order] : []}};
+  }
+  // Private, presentation-only updates are allowed even outside the player's
+  // turn. Ignore malformed/stale layouts silently: no gameplay revision, reply,
+  // broadcast, or exposure of the owner's tile identities.
+  saveHandLayout(room,seat,input) {
+    if(!room?.game || room.closed || !room.seats.includes(seat) ||
+       input?.round!==room.game.state.round || room.game.state.roundOver) return false;
+    const layout=normalizeHandLayout(input.handLayout,room.game.state.players[seat.id].hand);
+    if(!layout)return false;
+    seat.handLayout={...layout,round:room.game.state.round};
+    return true;
   }
   process(room,seat,input) {
     if(!room||!room.game||!room.seats.includes(seat))throw new GameError('room','Not in an active room.');
@@ -155,6 +198,9 @@ class RoomManager {
     if(room.game.state.current!==seat.id)throw new GameError('turn','It is not your turn.');
     if(!room.game.handMatches(seat.id,input.handBefore))throw new GameError('hand','Your hand is out of sync with the server.');
     const game=room.game;
+    // Gameplay actions also carry layout updates: validate against the hand
+    // before the action, then prune tiles played during that action.
+    const proposedLayout=normalizeHandLayout(input.handLayout,game.state.players[seat.id].hand);
     let result;
     const ids=input.tileIds;
     switch(input.action){
@@ -174,6 +220,13 @@ class RoomManager {
       case 'discard':result=game.discard(input.tileId);break;
       default:throw new GameError('action','Unsupported gameplay action.');
     }
+    // Public turn activity: only the draw source and count, never private tiles.
+    // Keep it visible through this player's play phase; clear on turn change.
+    if(input.action==='drawStock'){
+      room.lastDraw={playerId:seat.id,source:'stock',count:result.drawn.length};
+    }else if(input.action==='takePileExisting'||input.action==='takePileNew'){
+      room.lastDraw={playerId:seat.id,source:'discard',count:result.received.length+1};
+    }
     if(result.winnerId!==undefined&&result.winnerId!==null){
       const finish=game.finishRound(result.winnerId);
       room.results=publicRoundResults(finish);
@@ -182,12 +235,21 @@ class RoomManager {
       this.record(room,room.reason);
     }else if(input.action==='discard'){
       const advance=game.advanceTurn();
+      room.lastDraw=null;
       if(advance.roundEnds){
         const finish=game.finishRound(null);
         room.results=publicRoundResults(finish);
         room.reason='Stock exhausted; no legal discard pickup available.';
         this.record(room,room.reason);
       }
+    }
+    // Keep preferences current after any legal action, not just at turn end.
+    // A stock draw adds tiles after this snapshot; the client will send its
+    // updated order upon receipt of the authoritative new hand.
+    if(proposedLayout){
+      const remainingIds=new Set(game.state.players[seat.id].hand.map(tile=>tile.id));
+      seat.handLayout={sort:proposedLayout.sort,
+        order:proposedLayout.order.filter(id=>remainingIds.has(id)),round:game.state.round};
     }
     room.revision++;
     seat.seen.set(input.actionId,true);
@@ -198,7 +260,7 @@ class RoomManager {
     if(!room?.game||room.seats[0]!==seat)throw new GameError('host','Only the host can advance the round.');
     if(!room.game.state.roundOver)throw new GameError('round','The round is still running.');
     if(room.results?.winnerPlayerIds?.length)throw new GameError('match','The match has ended.');
-    room.game.nextRound();room.revision++;room.results=null;room.reason='';
+    room.game.nextRound();room.revision++;room.results=null;room.reason='';room.lastDraw=null;
     for(const s of room.seats)s.seen.clear();
     this.record(room,`Round ${room.game.state.round} has started.`);
   }

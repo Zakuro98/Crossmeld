@@ -187,6 +187,46 @@
   .topbar h1 { font-size: 18px; margin: 0; }
   .game-room-actions { display:flex; align-items:center; gap:7px; flex-wrap:wrap; justify-content:flex-end; }
   .game-room-actions button { white-space:nowrap; }
+  /* Keep the title, actions, and round information in distinct layout areas.
+     Desktop preserves the original two-column header. */
+  .game-heading {
+    display: grid;
+    grid-template-columns: minmax(0,1fr) auto;
+    grid-template-areas: "brand actions" "round actions";
+    align-items: center;
+    column-gap: 12px;
+    row-gap: 5px;
+  }
+  .game-brand { grid-area: brand; min-width: 0; }
+  .game-heading > .game-room-actions { grid-area: actions; }
+  .game-heading > #roundLabel { grid-area: round; }
+  @media (max-width: 600px) {
+    /* Phone layout: logo, then controls, then match details and status pills. */
+    .game-heading {
+      grid-template-columns: minmax(0,1fr);
+      grid-template-areas: "brand" "actions" "round";
+      row-gap: 12px;
+    }
+    .game-heading > .game-room-actions {
+      display: grid;
+      width: 100%;
+      grid-template-columns: repeat(3, minmax(0,1fr));
+      gap: 7px;
+    }
+    .game-heading > .game-room-actions button {
+      min-width: 0;
+      width: 100%;
+      padding: 8px 6px;
+      min-height: 40px;
+      white-space: normal;
+      font-size: 12px;
+    }
+  }
+  @media (max-width: 340px) {
+    /* The smallest phones need room for legible action labels. */
+    .game-heading > .game-room-actions { grid-template-columns: repeat(2, minmax(0,1fr)); }
+    .game-heading > .game-room-actions #newGameBtn { grid-column: 1 / -1; }
+  }
 
   .statusline { margin-top: 8px; display: flex; gap: 8px; flex-wrap: wrap; }
 
@@ -228,6 +268,17 @@
   .pile-card.interactive { cursor: pointer; transition: border-color .12s ease, box-shadow .12s ease, filter .12s ease; }
   .pile-card.action-ready { border-color: #8d9d73; box-shadow: inset 0 0 0 1px rgba(220,196,138,.16), 0 0 0 2px rgba(220,196,138,.07); }
   .pile-card.action-ready:hover { filter: brightness(1.05); }
+  /* The same contextual hint location doubles as a draw indicator on other turns. */
+  .pile-card.opponent-drew { animation: opponent-draw-pulse 1s ease-out 1; }
+  .pile-card.opponent-drew .action-hint { color: #e9d39d; }
+  @keyframes opponent-draw-pulse {
+    0% { box-shadow: 0 0 0 0 rgba(235,204,115,.45); border-color: #e9d39d; }
+    45% { box-shadow: 0 0 0 4px rgba(235,204,115,.17), 0 0 20px rgba(235,204,115,.14); }
+    100% { box-shadow: none; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .pile-card.opponent-drew { animation: none; }
+  }
   .pile-card.drop-hover,
   .new-meld-target.drop-hover,
   details.meld.drop-hover { outline: 3px solid var(--accent); outline-offset: 2px; }
@@ -254,9 +305,14 @@
   .hand-card { padding: 11px; position: sticky; bottom: var(--page-pad); z-index: 4; background: rgba(18,29,21,.95); backdrop-filter: blur(14px); box-shadow: 0 -8px 26px rgba(0,0,0,.25), inset 0 1px rgba(255,255,255,.03); }
   .hand-toolbar { display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; }
   .hand-expand-btn { display: none; }
-  .hand { display: flex; flex-wrap: wrap; gap: var(--gap); align-content: flex-start; max-height: 36vh; overflow-y: auto; padding: 9px 5px 10px; }
+  /* Keep normal-sized hands unclipped without changing their dimensions.  When there are too many tiles
+     to fit, the client adds .hand-scroll-needed to retain vertical scrolling. */
+  .hand { display: flex; flex-wrap: wrap; gap: var(--gap); align-content: flex-start; max-height: 36vh; overflow: visible; padding: 9px 5px 10px; }
+  .hand.hand-scroll-needed { overflow-y: auto; }
   .hand-footer { margin-top: 7px; display: grid; gap: 8px; }
-  .hand-controls { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 8px; }
+  .hand-controls { display: grid; grid-template-columns: repeat(4,minmax(0,1fr)); gap: 8px; }
+  .hand-sort-option { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 12px; cursor: pointer; }
+  .hand-sort-option input { flex: none; margin: 0; accent-color: var(--accent); }
   .hand-controls button { min-height: 34px; padding: 6px 10px; font-size: 12px; }
   /* Tiles use custom Pointer Events for drag-and-drop, including vertical drags.
      pan-y lets mobile browsers steal upward swipes and fire pointercancel before
@@ -526,8 +582,8 @@
   }
 
   @media (max-width: 440px) {
-    .hand-controls { grid-template-columns: 1fr 1fr; }
-    .hand-controls #clearSelectionBtn { grid-column: 1 / -1; }
+    .hand-controls { grid-template-columns: repeat(2,minmax(0,1fr)); }
+    .hand-controls #clearSelectionBtn { grid-column: auto; }
   }
 
 
@@ -559,12 +615,14 @@
       gap: var(--gap);
       max-height: none;
       min-height: 0;
-      overflow-x: auto;
-      overflow-y: hidden;
+      overflow: visible;
       padding: 7px 5px 11px;
       overscroll-behavior-x: contain;
       -webkit-overflow-scrolling: touch;
     }
+    /* Preserve natural overflow on phone hands; only oversized
+       hands become scrollports when the client detects actual overflow. */
+    .hand-card.mobile-compact .hand.hand-scroll-needed { overflow-x: auto; overflow-y: hidden; }
     .hand-card.mobile-compact .hand .tile {
       --tile: var(--dock-tile);
       min-width: 0;
@@ -576,7 +634,8 @@
     }
     .hand-card.mobile-compact .hand-footer { display: none; }
     .hand-card.mobile-expanded { display: flex; flex-direction: column; max-height: min(72dvh, 520px); }
-    .hand-card.mobile-expanded .hand { min-height: 0; max-height: none; overflow-y: auto; flex: 1 1 auto; }
+    .hand-card.mobile-expanded .hand { min-height: 0; max-height: none; overflow: visible; flex: 1 1 auto; }
+    .hand-card.mobile-expanded .hand.hand-scroll-needed { overflow-y: auto; }
     .hand-card.mobile-expanded .hand-footer { flex: 0 0 auto; }
   }
 
@@ -593,7 +652,6 @@
 .menu-screen > p { font-size:var(--font-secondary); margin:4px 0 24px; }
 .menu-actions { max-width:350px; margin:0 auto; display:grid; gap:10px; }
 .menu-actions button { min-height:48px; font-weight:700; text-transform:uppercase; letter-spacing:.035em; }
-.menu-actions #menuResumeBtn { text-transform:none; font-size:var(--font-secondary); font-weight:600; min-height:38px; }
 #onlineEntryScreen h2,#setupScreen h2,#lobbyScreen h2,#howScreen h2 {font-size:22px; margin:0 0 7px; }
 #onlineEntryScreen > p,#setupScreen > p {margin:0 0 18px; font-size:var(--font-secondary);}
 #onlineEntryScreen .row button,#setupScreen .row button {flex:1;}
@@ -666,7 +724,7 @@
 .how-pile-contents-item {display:flex;align-items:center;gap:9px;min-width:0;color:var(--muted);font-size:var(--font-secondary);}
 .how-pile-contents-item .tile {--tile:33px;min-width:33px;}
 .how-pile-contents-item span {min-width:0;}
-.how-pile-contents-item:nth-child(3) span {color:var(--accent);font-weight:800;}
+.how-pile-contents-item:nth-child(3) > span {color:var(--accent);font-weight:800;}
 .how-contents-note {color:var(--muted);font-size:var(--font-small);line-height:1.45;}
 .how-score-list {display:grid;gap:0;border:1px solid #4d6146;border-radius:11px;overflow:hidden;margin-top:8px;}
 .how-score-row {display:flex;justify-content:space-between;gap:10px;align-items:flex-start;padding:9px 11px;background:linear-gradient(180deg,#23362a,#1b2b21);}
@@ -726,3 +784,134 @@
 .connection-indicator[data-state="connecting"] { color: var(--warn); }
 .connection-indicator[data-state="connecting"] .connection-dot { background: var(--warn); }
 .connection-indicator[data-state="offline"] .connection-dot { background: var(--danger); }
+
+/* Always available, even after a refresh or while reconnecting on mobile. */
+.diagnostics-footer { display:flex; align-items:center; justify-content:center; flex-wrap:wrap; gap:8px; margin:18px auto 4px; text-align:center; }
+.diagnostics-footer button { min-height:36px; font-size:12px; padding:7px 10px; opacity:.80; }
+#diagnosticsStatus { width:100%; min-height:1.2em; }
+.diagnostics-fallback { width:100%; min-height:170px; resize:vertical; color:var(--text); background:#101712; border:1px solid var(--border); padding:10px; border-radius:8px; font-size:12px; }
+
+/* Browser-local settings: readable on desktop and phone. */
+.settings-screen { max-width: 760px; width: 100%; margin-inline: auto; }
+.settings-screen > h2 { font-size: 22px; margin: 0 0 7px; }
+.settings-screen > p { margin: 0 0 17px; }
+.settings-groups { display: grid; gap: 13px; }
+.settings-group { padding: 15px; display: grid; gap: 12px; }
+.settings-group h3 { margin: 0; font-size: var(--font-panel); }
+.settings-toggle { display: flex; align-items: flex-start; gap: 12px; cursor: pointer; line-height: 1.4; }
+/* Native form controls look out of place against Crossmeld's beveled, green/gold UI.
+   Keep actual checkbox inputs for keyboard, touch and screen-reader support. */
+.settings-toggle input[type="checkbox"] {
+  appearance: none; -webkit-appearance: none;
+  position: relative; flex: 0 0 22px; width: 22px; height: 22px;
+  min-height: 0; padding: 0; margin: 1px 0 0;
+  border: 1.5px solid #778a68; border-radius: 6px;
+  background: linear-gradient(180deg, #24382a, #142218);
+  box-shadow: inset 0 1px 3px rgba(0,0,0,.3), 0 1px 0 rgba(255,255,255,.04);
+  cursor: pointer; transition: border-color .12s ease, background .12s ease, box-shadow .12s ease;
+}
+.settings-toggle input[type="checkbox"]:hover { border-color: #c2b17c; }
+.settings-toggle input[type="checkbox"]:checked {
+  border-color: #dec890;
+  background: linear-gradient(180deg, #c2a96e, #967e4b);
+  box-shadow: inset 0 1px rgba(255,255,255,.3), 0 2px 5px rgba(0,0,0,.22);
+}
+.settings-toggle input[type="checkbox"]:checked::after {
+  content: ""; position: absolute; width: 10px; height: 6px;
+  left: 4px; top: 5px; border-left: 3px solid #162117; border-bottom: 3px solid #162117;
+  transform: rotate(-45deg);
+}
+.settings-toggle input[type="checkbox"]:focus-visible { outline: 3px solid #e7d29e; outline-offset: 3px; }
+.settings-toggle span { display: grid; gap: 4px; }
+.settings-toggle small { font-size: var(--font-secondary); color: var(--muted); }
+.settings-field { display: grid; gap: 6px; max-width: 360px; }
+.settings-field select { width: 100%; }
+.settings-tile-preview { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; padding: 8px 2px 14px; }
+.settings-tile-preview .tile { --tile: 46px; }
+.settings-footer { margin-top: 16px; }
+.settings-volume-row { display: grid; gap: 7px; grid-template-columns: minmax(0,1fr) auto; align-items: center; }
+.settings-volume-row label { grid-column: 1/-1; display: flex; gap: 10px; justify-content: space-between; font-weight: 700; }
+.settings-volume-row label output { font-variant-numeric: tabular-nums; color: var(--accent); }
+/* Fill and thumb use the same warm gold accents as primary game controls.
+   The fill is updated from the saved 0–100% preference on each slider change. */
+.settings-volume-row input[type="range"] {
+  appearance: none; -webkit-appearance: none;
+  width: 100%; min-width: 0; height: 38px; min-height: 38px;
+  margin: 0; padding: 0; border: 0; border-radius: 0;
+  background: linear-gradient(90deg,
+    #bba36c 0 var(--range-fill, 100%),
+    #2b4232 var(--range-fill, 100%) 100%) center / 100% 8px no-repeat;
+  cursor: pointer;
+}
+.settings-volume-row input[type="range"]::-webkit-slider-runnable-track {
+  height: 8px; border-radius: 99px; border: 1px solid #536b4d;
+  background: transparent; box-shadow: inset 0 1px 2px rgba(0,0,0,.35);
+}
+.settings-volume-row input[type="range"]::-moz-range-track {
+  height: 8px; border-radius: 99px; border: 1px solid #536b4d;
+  background: transparent; box-shadow: inset 0 1px 2px rgba(0,0,0,.35);
+}
+.settings-volume-row input[type="range"]::-webkit-slider-thumb {
+  appearance: none; -webkit-appearance: none; width: 22px; height: 22px;
+  margin-top: -8px; border: 2px solid #e4cf9c; border-radius: 7px;
+  background: linear-gradient(150deg, #d5bb80, #907949);
+  box-shadow: 0 2px 6px rgba(0,0,0,.42), inset 0 1px rgba(255,255,255,.3);
+}
+.settings-volume-row input[type="range"]::-moz-range-thumb {
+  width: 18px; height: 18px; border: 2px solid #e4cf9c; border-radius: 7px;
+  background: linear-gradient(150deg, #d5bb80, #907949);
+  box-shadow: 0 2px 6px rgba(0,0,0,.42), inset 0 1px rgba(255,255,255,.3);
+}
+.settings-volume-row input[type="range"]:hover::-webkit-slider-thumb { border-color: #fff0c6; filter: brightness(1.08); }
+.settings-volume-row input[type="range"]:hover::-moz-range-thumb { border-color: #fff0c6; filter: brightness(1.08); }
+.settings-volume-row input[type="range"]:focus-visible { outline: 2px solid #e7d29e; outline-offset: 2px; border-radius: 5px; }
+.settings-volume-row button { font-size: 12px; min-height: 37px; }
+@media(max-width:440px) {
+  .settings-screen { padding-inline: 14px; }
+  .settings-volume-row { grid-template-columns: minmax(0,1fr); }
+  .settings-volume-row button { justify-self: start; }
+}
+
+/* Numeral display preserves each tile's number and accessible title/ARIA label. */
+.tile .tile-numeral { display: none; position: relative; z-index: 1; color: var(--pip-color); font-weight: 1000;
+  font-size: calc(var(--tile) * .68); line-height: 1; transform: translateY(1.3px); text-shadow: 0 1px 1px var(--pip-drop); }
+/* A fixed optical offset prevents the numeral sinking as tiles get larger.
+   Preserve the already-centered natural-tile and discard-pile demonstrations. */
+.how-tiles .tile:not(.tile-mini) .tile-numeral,
+.how-pile .tile .tile-numeral { transform: translateY(calc(var(--tile) * .055)); }
+body.show-numerals .tile .pip-grid { display: none; }
+body.show-numerals .tile .tile-numeral { display: block; }
+/* Brand logo always uses the original pip tiles, regardless of appearance settings. */
+body.show-numerals .crossmeld-logo .logo-tile .pip-grid { display: grid; }
+
+/* Tile corner tags share a translucent visual language. Color identity stays
+   upper-right; a newly acquired tile is marked upper-left (hand only, unless
+   shown in Settings' preview). Both markers are independent browser settings. */
+.tile .tile-color-code, .tile .tile-new-tag {
+  display: none; position: absolute; top: 2px; z-index: 2;
+  padding: 0 2px; border-radius: 3px; font-family: inherit; font-size: 9px;
+  font-weight: 1000; line-height: 13px; text-align: center; color: #fff;
+  background: rgba(12,19,17,.62); box-shadow: 0 1px 2px rgba(0,0,0,.30);
+  pointer-events: none;
+}
+.tile .tile-color-code { right: 3px; min-width: 12px; }
+.tile .tile-new-tag { left: 3px; }
+body.show-color-labels .tile .tile-color-code { display: block; }
+body.show-new-tile-tags .tile.newly-acquired .tile-new-tag { display: block; }
+body.show-color-labels .tile.color-2 .tile-color-code { background: rgba(25,25,20,.70); }
+body.show-color-labels .tile.white .tile-color-code { background: rgba(30,34,38,.69); color: #fff; }
+body.show-color-labels .tile.black .tile-color-code { background: rgba(112,125,138,.66); color: #fff; }
+.tile.tile-mini .tile-color-code, .tile.tile-mini .tile-new-tag {
+  top: 1px; padding-inline: 1px; font-size: 8px; line-height: 11px;
+}
+.tile.tile-mini .tile-color-code { right: 1px; min-width: 10px; }
+.tile.tile-mini .tile-new-tag { left: 1px; }
+/* These tiny tags belong only on compact phone hands, never desktop hands. */
+@media (max-width: 600px) {
+  .hand-card.mobile-compact .tile .tile-color-code,
+  .hand-card.mobile-compact .tile .tile-new-tag { top: 1px; font-size: 7px; line-height: 10px; padding: 0 1px; }
+  .hand-card.mobile-compact .tile .tile-color-code { right: 1px; min-width: 9px; }
+  .hand-card.mobile-compact .tile .tile-new-tag { left: 1px; }
+}
+
+

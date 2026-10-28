@@ -6,7 +6,7 @@ function buildPages(projectRoot=path.resolve(__dirname,'..')) {
   const output=path.join(projectRoot,'dist');
   fs.rmSync(output,{recursive:true,force:true});
   fs.mkdirSync(path.join(output,'shared'),{recursive:true});
-  for(const file of ['index.html','style.css','client.js','favicon.svg','favicon.ico','apple-touch-icon.png'])
+  for(const file of ['index.html','style.css','client.js','diagnostics.js','preferences.js','favicon.svg','favicon.ico','apple-touch-icon.png'])
     fs.copyFileSync(path.join(projectRoot,'public',file),path.join(output,file));
   for(const file of ['tiles.js','rules.js','game.js'])
     fs.copyFileSync(path.join(projectRoot,'shared',file),path.join(output,'shared',file));

@@ -89,6 +89,33 @@
     });
   }
 
+  // Move one or more hand tiles as a stable block. Nonadjacent selected tiles
+  // keep their left-to-right order; all unselected tiles retain theirs.
+  // Dropping on a member of the moving group is intentionally a no-op.
+  function reorderHandTiles(hand, draggedIds, targetId = null, after = false) {
+    const ids = new Set(draggedIds);
+    const moving = hand.filter(tile => ids.has(tile.id));
+    if (!moving.length || (targetId !== null && ids.has(targetId))) return hand.slice();
+    const rest = hand.filter(tile => !ids.has(tile.id));
+    let index = targetId === null ? rest.length : rest.findIndex(tile => tile.id === targetId);
+    if (index < 0) index = rest.length;
+    else if (after) index++;
+    return [...rest.slice(0,index),...moving,...rest.slice(index)];
+  }
+
+  // Use the last visible order for all surviving tiles; append incoming tiles
+  // in the order received. Useful when auto-sort-on-draw is disabled.
+  function preserveHandOrder(hand, previousIds) {
+    const byId = new Map(hand.map(tile => [tile.id,tile]));
+    const ordered = [];
+    for (const id of previousIds) {
+      if (!byId.has(id)) continue;
+      ordered.push(byId.get(id));
+      byId.delete(id);
+    }
+    return [...ordered,...byId.values()];
+  }
+
   return { COLORS, NUMBERS, PIP_POS, DEFAULT_DECK_CONFIG, buildDeck, shuffle,
-    startingHandSize, tileValue, tileAria, sortHand };
+    startingHandSize, tileValue, tileAria, sortHand, reorderHandTiles, preserveHandOrder };
 });
