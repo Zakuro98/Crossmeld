@@ -124,9 +124,20 @@
     return player.melds.filter(m => m.type !== 'black' && (m.completion === 'natural' || m.completion === 'mixed')).length;
   }
   function hasCompletedMeld(player) { return completedMeldCount(player) > 0; }
-  function requiredCompletedMelds(playerCount) { return playerCount === 2 ? 2 : 1; }
-  function canGoOut(player, playerCount, newlyCompletedMelds = 0) {
-    return completedMeldCount(player) + newlyCompletedMelds >= requiredCompletedMelds(playerCount);
+  // The configured threshold is shared by every seat and persists across rounds.
+  // playerCount remains an argument for compatibility with existing consumers.
+  function requiredCompletedMelds(playerCount, configured = 2) { return configured; }
+  function canGoOut(player, playerCount, newlyCompletedMelds = 0, configured = 2) {
+    return completedMeldCount(player) + newlyCompletedMelds >= requiredCompletedMelds(playerCount, configured);
+  }
+
+  // The shared privilege changes discard count, never going-out eligibility.
+  function discardLimit(state, player = state.players[state.current]) {
+    if (state.allowDuplicates !== false) return 1;
+    const qualifies = p => canGoOut(p, state.players.length, 0, state.requiredCompletions);
+    const unlocked = state.doubleDiscardScope === 'everyone'
+      ? state.players.some(qualifies) : qualifies(player);
+    return unlocked ? 2 : 1;
   }
 
   function meldName(meld) {
@@ -187,7 +198,7 @@
     return options;
   }
 
-  function hasAnyTakeOption(player, discard, discardFrozen, requiredCount = 1, allowDuplicates = true) {
+  function hasAnyTakeOption(player, discard, discardFrozen, requiredCount = 2, allowDuplicates = true) {
     if (!discard.length) return false;
     const top = discard[discard.length - 1];
     if (top.kind === 'black') return false;
@@ -225,7 +236,7 @@
     return false;
   }
 
-  function wouldQualifyToGoOutWithNewMeld(player, tiles, options, requiredCount = 1) {
+  function wouldQualifyToGoOutWithNewMeld(player, tiles, options, requiredCount = 2) {
     return options.some(o => completedMeldCount(player) +
       (completionState({ type: o.type, target: o.target, tiles, completion: null }) ? 1 : 0) >= requiredCount);
   }
@@ -237,5 +248,5 @@
     return ids.every(id => owned.has(id));
   }
 
-  return { isCompatible, isWild, meldNaturalCount, meldWildCount, ordinaryMeldLimitsOk, meldIdentitiesUnique, candidateMelds, isNormalForAxis, completionState, updateCompletion, hasCompletedMeld, completedMeldCount, requiredCompletedMelds, canGoOut, meldName, meldTilePoints, meldBonusPoints, provisionalRoundScore, handPenalty, canTopAddToMeld, hasFrozenNaturalPair, hasAnyNewMeldWithTop, selectedNewMeldOptions, hasAnyTakeOption, wouldQualifyToGoOutWithNewMeld, handCompositionMatches };
+  return { isCompatible, isWild, meldNaturalCount, meldWildCount, ordinaryMeldLimitsOk, meldIdentitiesUnique, candidateMelds, isNormalForAxis, completionState, updateCompletion, hasCompletedMeld, completedMeldCount, requiredCompletedMelds, canGoOut, discardLimit, meldName, meldTilePoints, meldBonusPoints, provisionalRoundScore, handPenalty, canTopAddToMeld, hasFrozenNaturalPair, hasAnyNewMeldWithTop, selectedNewMeldOptions, hasAnyTakeOption, wouldQualifyToGoOutWithNewMeld, handCompositionMatches };
 });

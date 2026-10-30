@@ -108,6 +108,9 @@
             <label>Game target<input id="lobbyTargetScore" type="number" min="100" max="10000" step="50" value="1500" /></label>
             <label>Round 1 starts<select id="lobbyFirstPlayer"><option value="random">Random</option></select></label>
             <label>Duplicates in melds<select id="lobbyAllowDuplicates"><option value="true" selected>Allowed</option><option value="false">Not allowed</option></select></label>
+            <label>Natural tile distribution<select id="lobbyRandomNaturals"><option value="false" selected>Balanced (3 of each)</option><option value="true">Random (108 independent tiles)</option></select></label>
+            <label>Completed melds to go out<input id="lobbyRequiredCompletions" type="number" min="1" max="20" step="1" value="2" /></label>
+            <label>Two-tile discard unlock<select id="lobbyDoubleDiscardScope" disabled><option value="self" selected>Only the qualifying player</option><option value="everyone">Everyone once any player qualifies</option></select><span class="tiny muted">Only applies with duplicates disabled.</span></label>
           </div>
           <p class="tiny muted" id="lobbySettingsNote"></p>
           <button type="button" id="lobbySaveSettingsBtn" class="ghost">Save settings</button>
@@ -142,7 +145,7 @@
       <h3 class="how-turn-heading">On your turn</h3>
       <div class="how-flow-step"><span class="how-flow-num">1</span><p>Draw <strong>two tiles</strong> from the stock, or take the discard pile if its top tile can be used immediately.</p></div>
       <div class="how-flow-step"><span class="how-flow-num">2</span><p>Optionally, create new melds or add tiles to your existing melds. Only you can modify your own melds, although everyone can see them.</p></div>
-      <div class="how-flow-step"><span class="how-flow-num">3</span><p>End your turn by discarding <strong>one tile</strong>. If you legally go out by melding your last tiles, no discard is needed.</p></div>
+      <div class="how-flow-step"><span class="how-flow-num">3</span><p>End your turn by discarding <strong>one tile</strong>, or optionally <strong>two tiles together</strong> when unlocked with duplicates disabled. If you legally go out by melding your last tiles, no discard is needed.</p></div>
     </div>
 
     <div class="how-grid">
@@ -193,9 +196,7 @@
       <article class="subcard how-panel how-panel--going-out">
         <h3>Going out</h3>
         <ul class="how-bullets">
-          <li>To go out, you must first have the required number of <strong>completed ordinary melds</strong>.</li>
-          <li>In a <strong>2-player</strong> game, you need <strong>2 completed ordinary melds</strong>.</li>
-          <li>In a <strong>3- or 4-player</strong> game, you need <strong>1 completed ordinary meld</strong>.</li>
+          <li>To go out, you need the <strong>number of completed ordinary melds chosen at game setup</strong> (natural or mixed; default 2).</li>
           <li>You can go out either by <strong>discarding your final tile</strong> or by <strong>melding your final tiles</strong> and ending with an empty hand.</li>
           <li>If you made <strong>no melds on earlier turns that round</strong> and then go out on one final turn, that is a <strong>concealed going out</strong>.</li>
         </ul>
@@ -222,6 +223,7 @@
           <li>A meld must have <strong>at least 3 tiles</strong>.</li>
           <li>A meld is either all the <strong>same number</strong> or all the <strong>same color</strong>.</li>
           <li><strong>Duplicates allowed</strong> is a match setting. When off, each meld can use each identity only once (each color in a number meld, each number in a color meld). Wilds fill missing identities.</li>
+          <li>With duplicates disabled, meeting the configured completed-meld requirement unlocks discarding <strong>one or two tiles together</strong>. The <strong>Two-tile discard unlock</strong> setting chooses whether this applies only to that player, or to everyone once any player qualifies. Each player still needs their own required completions to go out. Choose which discarded tile goes on top; a wild in either position freezes the pile.</li>
           <li>An ordinary meld must contain <strong>at least 2 natural tiles</strong>.</li>
           <li>An ordinary meld can contain <strong>at most 2 wild tiles</strong>.</li>
         </ul>
@@ -289,6 +291,13 @@
       <label>Duplicates in melds
         <select id="localAllowDuplicates"><option value="true" selected>Allowed</option><option value="false">Not allowed</option></select>
       </label>
+      <label>Natural tile distribution
+        <select id="localRandomNaturals"><option value="false" selected>Balanced (3 of each)</option><option value="true">Random (108 independent tiles)</option></select>
+      </label>
+      <label>Completed melds to go out
+        <input id="localRequiredCompletions" type="number" min="1" max="20" step="1" value="2" />
+      </label>
+      <label>Two-tile discard unlock<select id="localDoubleDiscardScope" disabled><option value="self" selected>Only the qualifying player</option><option value="everyone">Everyone once any player qualifies</option></select><span class="tiny muted">Only applies with duplicates disabled.</span></label>
     </div>
     <div class="row" style="margin-top:14px">
       <button id="localBackBtn" type="button" class="ghost">Back</button>

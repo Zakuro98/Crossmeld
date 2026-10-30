@@ -14,6 +14,9 @@ function validCount(n) { return Number.isSafeInteger(n) && n >= 2 && n <= 4; }
 function defaultTargetForCount(count) { return {2:1500,3:1250,4:1000}[count]; }
 function validTarget(n) { return Number.isSafeInteger(n) && n >= 100 && n <= 10000; }
 function validDuplicates(value) { return typeof value === 'boolean'; }
+function validRandomNaturals(value) { return typeof value === 'boolean'; }
+function validDoubleDiscardScope(value) { return value === 'self' || value === 'everyone'; }
+function validRequiredCompletions(value) { return Number.isSafeInteger(value) && value >= 1 && value <= 20; }
 // Presentation-only information. Reject malformed or incomplete lists rather
 // than allowing a client to persist a layout containing nonexistent tile IDs.
 function normalizeHandLayout(layout, hand) {
@@ -37,16 +40,19 @@ class RoomManager {
     if(room.messages.length>75)room.messages.shift();
     return entry;
   }
-  create({name, targetScore, playerCount = 2, firstPlayer = 'random', allowDuplicates = true} = {}, connection) {
+  create({name, targetScore, playerCount = 2, firstPlayer = 'random', allowDuplicates = true, randomNaturals = false, requiredCompletions = 2, doubleDiscardScope = 'self'} = {}, connection) {
     if(!validCount(playerCount))throw new GameError('settings','Choose 2–4 players.');
     if(targetScore===undefined)targetScore=defaultTargetForCount(playerCount);
     if(!validTarget(targetScore))throw new GameError('settings','Invalid target score.');
     if(!validFirstPlayer(firstPlayer,playerCount))throw new GameError('settings','Choose a valid Round 1 starting player.');
     if(!validDuplicates(allowDuplicates))throw new GameError('settings','Invalid duplicate setting.');
+    if(!validRandomNaturals(randomNaturals))throw new GameError('settings','Invalid natural tile distribution.');
+    if(!validRequiredCompletions(requiredCompletions))throw new GameError('settings','Required completed melds must be 1–20.');
+    if(!validDoubleDiscardScope(doubleDiscardScope))throw new GameError('settings','Invalid two-tile discard unlock setting.');
     let code;
     do { code=randomCode(); } while(this.rooms.has(code));
     const seat = {id:0,name:cleanName(name,'Player 1'),token:crypto.randomBytes(32).toString('hex'),connection,seen:new Map(),handLayout:null};
-    const room={code,targetScore,playerCount,firstPlayer,allowDuplicates,seats:[seat],game:null,revision:0,results:null,reason:'',closed:false,
+    const room={code,targetScore,playerCount,firstPlayer,allowDuplicates,randomNaturals,requiredCompletions,doubleDiscardScope,seats:[seat],game:null,revision:0,results:null,reason:'',closed:false,
       messages:[],messageId:0,lastDraw:null};
     this.record(room,`${seat.name} created the room.`);
     this.rooms.set(code,room);
@@ -126,16 +132,19 @@ class RoomManager {
     room.closed=true;
     this.rooms.delete(room.code);
   }
-  configure(room,seat,{playerCount,targetScore,firstPlayer=room?.firstPlayer,allowDuplicates=room?.allowDuplicates}={}) {
+  configure(room,seat,{playerCount,targetScore,firstPlayer=room?.firstPlayer,allowDuplicates=room?.allowDuplicates,randomNaturals=room?.randomNaturals,requiredCompletions=room?.requiredCompletions,doubleDiscardScope=room?.doubleDiscardScope}={}) {
     if(!room||room.game)throw new GameError('settings','Settings cannot be changed after the match starts.');
     if(seat!==room.seats[0])throw new GameError('host','Only the host can change settings.');
     if(!validCount(playerCount)||playerCount<room.seats.length)throw new GameError('settings','Player count must accommodate everyone already in the room (2–4).');
     if(!validTarget(targetScore))throw new GameError('settings','Target score must be 100–10000.');
     if(!validFirstPlayer(firstPlayer,playerCount))throw new GameError('settings','Choose a valid Round 1 starting player.');
     if(!validDuplicates(allowDuplicates))throw new GameError('settings','Invalid duplicate setting.');
-    room.playerCount=playerCount;room.targetScore=targetScore;room.firstPlayer=firstPlayer;room.allowDuplicates=allowDuplicates;
+    if(!validRandomNaturals(randomNaturals))throw new GameError('settings','Invalid natural tile distribution.');
+    if(!validRequiredCompletions(requiredCompletions))throw new GameError('settings','Required completed melds must be 1–20.');
+    if(!validDoubleDiscardScope(doubleDiscardScope))throw new GameError('settings','Invalid two-tile discard unlock setting.');
+    room.playerCount=playerCount;room.targetScore=targetScore;room.firstPlayer=firstPlayer;room.allowDuplicates=allowDuplicates;room.randomNaturals=randomNaturals;room.requiredCompletions=requiredCompletions;room.doubleDiscardScope=doubleDiscardScope;
     const starterLabel=firstPlayer==='random'?'Random':`Player ${firstPlayer+1}`;
-    this.record(room,`Room settings: ${playerCount} players, first to ${targetScore} points, Round 1 first: ${starterLabel}, duplicates ${allowDuplicates ? 'allowed' : 'not allowed'}.`);
+    this.record(room,`Room settings: ${playerCount} players, first to ${targetScore} points, Round 1 first: ${starterLabel}, duplicates ${allowDuplicates ? 'allowed' : 'not allowed'}, natural tiles ${randomNaturals ? 'random' : 'balanced'}, ${requiredCompletions} completion${requiredCompletions === 1 ? '' : 's'} to go out, two-tile discards unlocked for ${doubleDiscardScope === 'everyone' ? 'everyone once any player qualifies' : 'each qualifying player only'} (duplicates off).`);
   }
   start(room,seat) {
     if(!room||room.game)throw new GameError('room','This match has already started.');
@@ -143,7 +152,7 @@ class RoomManager {
     if(room.seats.length!==room.playerCount)throw new GameError('room',`Waiting for ${room.playerCount-room.seats.length} more player(s).`);
     if(room.seats.some(s=>!connected(s)))throw new GameError('room','All players must be connected to start.');
     const firstPlayer=room.firstPlayer==='random'?crypto.randomInt(room.playerCount):room.firstPlayer;
-    const game=new Game({names:room.seats.map(s=>s.name),targetScore:room.targetScore,firstPlayer,allowDuplicates:room.allowDuplicates,
+    const game=new Game({names:room.seats.map(s=>s.name),targetScore:room.targetScore,firstPlayer,allowDuplicates:room.allowDuplicates,randomNaturals:room.randomNaturals,requiredCompletions:room.requiredCompletions,doubleDiscardScope:room.doubleDiscardScope,
       rng:()=>crypto.randomInt(0,4294967296)/4294967296});
     game.startRound();
     room.game=game;room.revision=1;room.lastDraw=null;
@@ -160,7 +169,7 @@ class RoomManager {
   }
   getLobby(room,seat) {
     if(!room?.seats.includes(seat))throw new GameError('room','Not in this room.');
-    return {code:room.code,playerCount:room.playerCount,targetScore:room.targetScore,firstPlayer:room.firstPlayer,allowDuplicates:room.allowDuplicates,
+    return {code:room.code,playerCount:room.playerCount,targetScore:room.targetScore,firstPlayer:room.firstPlayer,allowDuplicates:room.allowDuplicates,randomNaturals:room.randomNaturals,requiredCompletions:room.requiredCompletions,doubleDiscardScope:room.doubleDiscardScope,
       seatId:seat.id,isHost:room.seats[0]===seat,started:!!room.game,
       players:room.seats.map(s=>({id:s.id,name:s.name,connected:connected(s),isHost:s===room.seats[0]})),
       messages:room.messages.slice()};
@@ -217,7 +226,7 @@ class RoomManager {
       case 'addToMeld':
         if(!Number.isSafeInteger(input.meldId)||!Array.isArray(ids)||ids.length>room.game.state.players[seat.id].hand.length)throw new GameError('tiles','Invalid tile selection.');
         result=game.addToMeld(input.meldId,ids);break;
-      case 'discard':result=game.discard(input.tileId);break;
+      case 'discard':result=game.discard(input.tileIds ?? input.tileId);break;
       default:throw new GameError('action','Unsupported gameplay action.');
     }
     // Public turn activity: only the draw source and count, never private tiles.

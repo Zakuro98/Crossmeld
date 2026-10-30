@@ -8,7 +8,7 @@
 })(typeof globalThis !== 'undefined' ? globalThis : this, function (tiles, rules) {
   'use strict';
   const {
-    candidateMelds, completionState, updateCompletion, canGoOut, requiredCompletedMelds,
+    candidateMelds, completionState, updateCompletion, canGoOut, requiredCompletedMelds, discardLimit,
     meldNaturalCount, isNormalForAxis, isCompatible, meldWildCount, meldIdentitiesUnique,
     canTopAddToMeld, selectedNewMeldOptions, hasAnyTakeOption,
     handCompositionMatches, meldTilePoints, meldBonusPoints, handPenalty,
@@ -44,16 +44,16 @@
   // Do not permit a play to leave one tile and no completed meld: the player
   // would be unable to discard it or go out. Emptying the hand is legal only
   // when the player qualifies to go out (including completion by this move).
-  function validatePostPlayHand(player, remaining, playerCount, newlyCompletedMeld = false) {
-    const qualifies = canGoOut(player, playerCount, newlyCompletedMeld ? 1 : 0);
-    const required = requiredCompletedMelds(playerCount);
+  function validatePostPlayHand(player, remaining, playerCount, newlyCompletedMeld = false, requiredCompletions = 2) {
+    const qualifies = canGoOut(player, playerCount, newlyCompletedMeld ? 1 : 0, requiredCompletions);
+    const required = requiredCompletedMelds(playerCount, requiredCompletions);
     if (remaining === 0 && !qualifies) fail('go-out', `You need ${required} completed ordinary meld${required === 1 ? '' : 's'} to go out.`);
     if (remaining === 1 && !qualifies) fail('stranded', `That move would leave one tile with no legal way to finish your turn. You need ${required} completed ordinary meld${required === 1 ? '' : 's'} to discard your last tile.`);
     return remaining === 0 ? player.id : null;
   }
 
   class Game {
-    constructor({ names, targetScore = 1000, firstPlayer = 0, allowDuplicates = true, deckConfig = tiles.DEFAULT_DECK_CONFIG, rng = Math.random } = {}) {
+    constructor({ names, targetScore = 1000, firstPlayer = 0, allowDuplicates = true, randomNaturals = false, requiredCompletions = 2, doubleDiscardScope = 'self', deckConfig = tiles.DEFAULT_DECK_CONFIG, rng = Math.random } = {}) {
       if (!Array.isArray(names) || names.length < 2 || names.length > 4) fail('players', 'Crossmeld requires 2–4 players.');
       if (!Number.isSafeInteger(targetScore) || targetScore < 100 || targetScore > 10000) {
         fail('settings', 'Game target must be an integer between 100 and 10000 points.');
@@ -62,12 +62,15 @@
         fail('settings', 'First player must be a valid player seat.');
       }
       if (typeof allowDuplicates !== 'boolean') fail('settings', 'Duplicates allowed must be on or off.');
+      if (typeof randomNaturals !== 'boolean') fail('settings', 'Random natural tiles must be on or off.');
+      if (!Number.isSafeInteger(requiredCompletions) || requiredCompletions < 1 || requiredCompletions > 20) fail('settings', 'Required completed melds must be an integer between 1 and 20.');
+      if (!['self', 'everyone'].includes(doubleDiscardScope)) fail('settings', 'Choose who unlocks two-tile discards.');
       this.deckConfig = { ...deckConfig };
       this.rng = rng;
       this.nextTileId = 1;
       this.nextMeldId = 1;
       this.state = {
-        targetScore, allowDuplicates, round: 1, starter: firstPlayer, current: firstPlayer, phase: 'draw', roundHistory: [],
+        targetScore, allowDuplicates, randomNaturals, requiredCompletions, doubleDiscardScope, round: 1, starter: firstPlayer, current: firstPlayer, phase: 'draw', roundHistory: [],
         stock: [], discard: [], discardFrozen: false, roundOver: false, discardedThisTurn: false, meldedOutThisTurn: false,
         players: names.map((name, id) => ({ id, name, hand: [], melds: [], totalScore: 0, exposedMeldsPreviously: false })),
       };
@@ -79,7 +82,7 @@
       // round or consume instance IDs before startRound throws.
       let nextId = this.nextTileId;
       const freshDeck = tiles.buildDeck(this.deckConfig, {
-        rng: this.rng, nextId: () => nextId++,
+        rng: this.rng, nextId: () => nextId++, randomNaturals: s.randomNaturals,
       });
       const size = tiles.startingHandSize(s.players.length);
       if (freshDeck.length < size * s.players.length + 1) {
@@ -138,7 +141,7 @@
       if (top.kind === 'black' || !canTopAddToMeld(top, meld, s.allowDuplicates)) fail('pickup', 'The top discard cannot join that meld.');
       const remaining = p.hand.length + s.discard.length - 1;
       const newlyCompletes = !meld.completion && !!completionState({ ...meld, tiles: [...meld.tiles, top] });
-      const winnerId = validatePostPlayHand(p, remaining, s.players.length, newlyCompletes);
+      const winnerId = validatePostPlayHand(p, remaining, s.players.length, newlyCompletes, s.requiredCompletions);
       const pile = s.discard.splice(0);
       meld.tiles.push(pile.pop());
       const completedNow = updateCompletion(meld);
@@ -162,7 +165,7 @@
       // removing any tiles. This pickup's meld can itself earn completion.
       const remainingAfterPickup = p.hand.length - selected.length + s.discard.length - 1;
       const pickupCompletes = !!completionState({ type: option.type, target: option.target, tiles: [...selected, top] });
-      const winnerId = validatePostPlayHand(p, remainingAfterPickup, s.players.length, pickupCompletes);
+      const winnerId = validatePostPlayHand(p, remainingAfterPickup, s.players.length, pickupCompletes, s.requiredCompletions);
       const pile = s.discard.splice(0);
       const usedTop = pile.pop();
       removeFromHand(p, ids);
@@ -187,7 +190,7 @@
         if (selected.length !== p.hand.length) {
           fail('black', 'Black tiles can only be melded as your final play to go out.');
         }
-        if (!canGoOut(p, s.players.length)) fail('go-out', `You need ${requiredCompletedMelds(s.players.length)} completed ordinary melds before going out with black tiles.`);
+        if (!canGoOut(p, s.players.length, 0, s.requiredCompletions)) fail('go-out', `You need ${requiredCompletedMelds(s.players.length, s.requiredCompletions)} completed ordinary meld${s.requiredCompletions === 1 ? '' : 's'} before going out with black tiles.`);
         removeFromHand(p, ids);
         const meld = { id: this.nextMeldId++, type: 'black', target: null, tiles: selected, completion: null };
         p.melds.push(meld);
@@ -201,7 +204,7 @@
       requireTarget(options, option);
       const remaining = p.hand.length - selected.length;
       const completes = !!completionState({ type: option.type, target: option.target, tiles: selected });
-      const winnerId = validatePostPlayHand(p, remaining, s.players.length, completes);
+      const winnerId = validatePostPlayHand(p, remaining, s.players.length, completes, s.requiredCompletions);
       removeFromHand(p, ids);
       const meld = { id: this.nextMeldId++, type: option.type, target: option.target, tiles: selected, completion: null };
       const completedNow = updateCompletion(meld);
@@ -225,7 +228,7 @@
         fail('duplicates', 'Each color or number can appear only once in this meld.');
       const remaining = p.hand.length - selected.length;
       const newlyCompletes = !meld.completion && !!completionState({ ...meld, tiles: [...meld.tiles, ...selected] });
-      const winnerId = validatePostPlayHand(p, remaining, s.players.length, newlyCompletes);
+      const winnerId = validatePostPlayHand(p, remaining, s.players.length, newlyCompletes, s.requiredCompletions);
       removeFromHand(p, ids);
       meld.tiles.push(...selected);
       const completedNow = updateCompletion(meld);
@@ -233,18 +236,24 @@
       return { meld, completedNow, winnerId };
     }
 
-    discard(tileId) {
+    discard(tileIds) {
       const s = this.state;
       requirePhase(s, 'play');
       if (s.discardedThisTurn) fail('discard', 'You already discarded this turn.');
       const p = currentPlayer(s);
-      const [tile] = ownedTiles(p, [tileId]);
-      if (p.hand.length === 1 && !canGoOut(p, s.players.length)) fail('go-out', `You need ${requiredCompletedMelds(s.players.length)} completed ordinary melds before discarding your final tile.`);
-      removeFromHand(p, [tileId]);
-      s.discard.push(tile);
-      if (tile.kind === 'blank' || tile.kind === 'white') s.discardFrozen = true;
+      // Single-ID callers remain compatible; arrays are ordered bottom to top.
+      const ids = Array.isArray(tileIds) ? tileIds : [tileIds];
+      const limit = discardLimit(s, p);
+      if (ids.length > limit) fail('discard-count', `You may discard up to ${limit} tile${limit === 1 ? '' : 's'} this turn.`);
+      const owned = ownedTiles(p, ids);
+      const byId = new Map(owned.map(tile => [tile.id, tile]));
+      const discarded = ids.map(id => byId.get(id));
+      if (p.hand.length === discarded.length && !canGoOut(p, s.players.length, 0, s.requiredCompletions)) fail('go-out', `You need ${requiredCompletedMelds(s.players.length, s.requiredCompletions)} completed ordinary meld${s.requiredCompletions === 1 ? '' : 's'} before discarding your final tiles.`);
+      removeFromHand(p, ids);
+      s.discard.push(...discarded);
+      if (discarded.some(tile => tile.kind === 'blank' || tile.kind === 'white')) s.discardFrozen = true;
       s.discardedThisTurn = true;
-      return { tile, playerId: p.id, winnerId: p.hand.length ? null : p.id };
+      return { tile: discarded[discarded.length - 1], tiles: discarded, playerId: p.id, winnerId: p.hand.length ? null : p.id };
     }
 
     advanceTurn() {
@@ -260,7 +269,7 @@
       s.phase = 'draw';
       const p = currentPlayer(s);
       return { playerId: p.id, stockExhausted: !s.stock.length,
-        roundEnds: !s.stock.length && !hasAnyTakeOption(p, s.discard, s.discardFrozen, requiredCompletedMelds(s.players.length), s.allowDuplicates) };
+        roundEnds: !s.stock.length && !hasAnyTakeOption(p, s.discard, s.discardFrozen, requiredCompletedMelds(s.players.length, s.requiredCompletions), s.allowDuplicates) };
     }
 
     scoreRound(winnerId) {
@@ -280,15 +289,15 @@
         // stock is empty and the next player cannot legally take the pile.
         if (s.phase !== 'draw' || s.stock.length !== 0 ||
             hasAnyTakeOption(currentPlayer(s), s.discard, s.discardFrozen,
-              requiredCompletedMelds(s.players.length), s.allowDuplicates)) {
+              requiredCompletedMelds(s.players.length, s.requiredCompletions), s.allowDuplicates)) {
           fail('round', 'The round cannot end while a legal turn is available.');
         }
       } else {
         const s = this.state;
         const winner = s.players.find(p => p.id === winnerId);
         if (!winner || !(s.discardedThisTurn || s.meldedOutThisTurn) || s.players[s.current].id !== winnerId ||
-            winner.hand.length !== 0 || !canGoOut(winner, s.players.length)) {
-          fail('go-out', `A player needs ${requiredCompletedMelds(s.players.length)} completed ordinary melds to go out.`);
+            winner.hand.length !== 0 || !canGoOut(winner, s.players.length, 0, s.requiredCompletions)) {
+          fail('go-out', `A player needs ${requiredCompletedMelds(s.players.length, s.requiredCompletions)} completed ordinary meld${s.requiredCompletions === 1 ? '' : 's'} to go out.`);
         }
       }
       const results = this.scoreRound(winnerId);

@@ -38,7 +38,8 @@
   }
 
   function buildDeck(config = DEFAULT_DECK_CONFIG, options = {}) {
-    const { rng = Math.random, nextId = (() => { let id = 1; return () => id++; })() } = options;
+    const { rng = Math.random, nextId = (() => { let id = 1; return () => id++; })(), randomNaturals = false } = options;
+    if (typeof randomNaturals !== 'boolean') throw new TypeError('Random naturals must be on or off.');
     for (const key of ['normalCopies','coloredBlankCopies','whiteNumberedCopies','blackCopies']) {
       if (!Number.isSafeInteger(config[key]) || config[key] < 0) {
         throw new TypeError(`Deck configuration ${key} must be a non-negative integer.`);
@@ -46,8 +47,18 @@
     }
     const deck = [];
     const add = (kind, color, number) => deck.push({ id: nextId(), kind, color, number });
-    for (let copy = 0; copy < config.normalCopies; copy++) {
-      for (const color of COLORS) for (const number of NUMBERS) add('normal', color.id, number);
+    if (randomNaturals) {
+      // Each of the same 36 * normalCopies natural slots gets an independent,
+      // uniformly chosen color and number. Counts of individual identities
+      // are intentionally not guaranteed, but the total size stays fixed.
+      for (let i = 0; i < config.normalCopies * COLORS.length * NUMBERS.length; i++) {
+        add('normal', COLORS[Math.floor(rng() * COLORS.length)].id,
+          NUMBERS[Math.floor(rng() * NUMBERS.length)]);
+      }
+    } else {
+      for (let copy = 0; copy < config.normalCopies; copy++) {
+        for (const color of COLORS) for (const number of NUMBERS) add('normal', color.id, number);
+      }
     }
     for (let copy = 0; copy < config.coloredBlankCopies; copy++) {
       for (const color of COLORS) add('blank', color.id, null);

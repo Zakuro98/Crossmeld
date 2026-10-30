@@ -69,6 +69,9 @@
     targetScore: document.getElementById('targetScore'),
     localFirstPlayer: document.getElementById('localFirstPlayer'),
     localAllowDuplicates: document.getElementById('localAllowDuplicates'),
+    localRandomNaturals: document.getElementById('localRandomNaturals'),
+    localRequiredCompletions: document.getElementById('localRequiredCompletions'),
+    localDoubleDiscardScope: document.getElementById('localDoubleDiscardScope'),
     startGameBtn: document.getElementById('startGameBtn'),
     newGameBtn: document.getElementById('newGameBtn'),
     gameAbortBtn: document.getElementById('gameAbortBtn'),
@@ -120,7 +123,7 @@
   const {
     isCompatible, isWild, meldNaturalCount, meldWildCount, candidateMelds,
     isNormalForAxis, completionState, updateCompletion, canGoOut, requiredCompletedMelds,
-    meldName, provisionalRoundScore, canTopAddToMeld,
+    meldName, provisionalRoundScore, canTopAddToMeld, discardLimit,
   } = CrossmeldRules;
   const { Game, GameError, currentPlayer: playerOnTurn } = CrossmeldGame;
 
@@ -482,7 +485,7 @@
       case 'takePileNew': return gameInstance.takePileNew(action.tileIds,action.option);
       case 'createMeld': return gameInstance.createMeld(action.tileIds,action.option || null);
       case 'addToMeld': return gameInstance.addToMeld(action.meldId,action.tileIds);
-      case 'discard': return gameInstance.discard(action.tileId);
+      case 'discard': return gameInstance.discard(action.tileIds ?? action.tileId);
       default: throw new GameError('action','Unknown game action.');
     }
   }
@@ -555,7 +558,9 @@
       me.hand=preserveHandOrder(me.hand,previousHand);
     } else sortHand(me,online.sort);
     const nextState={
-      round:view.round,targetScore:view.targetScore,allowDuplicates:view.allowDuplicates,starter:view.starterId,
+      round:view.round,targetScore:view.targetScore,allowDuplicates:view.allowDuplicates,randomNaturals:view.randomNaturals,starter:view.starterId,
+      requiredCompletions:view.requiredCompletions,
+      doubleDiscardScope:view.doubleDiscardScope,
       current:view.currentPlayerId,phase:view.phase,roundOver:view.roundOver,
       stock:Array(view.stockCount).fill(null),discard:structuredClone(view.discard),
       discardFrozen:view.discardFrozen,players,discardedThisTurn:false, meldedOutThisTurn:false,
@@ -869,7 +874,14 @@
     const names = Array.from({ length: count }, (_, i) => `Player ${i + 1}`);
     const requestedFirst=selectedFirstPlayer(els.localFirstPlayer);
     const firstPlayer=requestedFirst==='random'?Math.floor(Math.random()*count):requestedFirst;
-    game = new Game({ names, targetScore: target, firstPlayer, allowDuplicates: els.localAllowDuplicates.value === 'true' });
+    const requiredCompletions=Number(els.localRequiredCompletions.value);
+    if(!Number.isSafeInteger(requiredCompletions)||requiredCompletions<1||requiredCompletions>20){
+      return showInfo('Invalid game setting', 'Choose between 1 and 20 completed melds to go out.');
+    }
+    game = new Game({ names, targetScore: target, firstPlayer, allowDuplicates: els.localAllowDuplicates.value === 'true',
+      randomNaturals: els.localRandomNaturals.value === 'true',
+      requiredCompletions: Number(els.localRequiredCompletions.value),
+      doubleDiscardScope: els.localDoubleDiscardScope.value });
     state = game.state;
     ui.selected = new Set();
     ui.newlyAcquired.clear();
@@ -898,7 +910,7 @@
   }
 
   function hasAnyTakeOption(player) {
-    return CrossmeldRules.hasAnyTakeOption(player, state.discard, state.discardFrozen, requiredCompletedMelds(state.players.length), state.allowDuplicates);
+    return CrossmeldRules.hasAnyTakeOption(player, state.discard, state.discardFrozen, requiredCompletedMelds(state.players.length, state.requiredCompletions), state.allowDuplicates);
   }
 
   function showGameError(error) {
@@ -919,7 +931,7 @@
       const p = currentPlayer();
       if(autoSortForPlayer(p))sortHand(p);
       ui.selected.clear();
-      setMessage(`${p.name} drew ${tileCount(drawn.length)}. Meld if you want, then discard one.`);
+      setMessage(`${p.name} drew ${tileCount(drawn.length)}. Meld if you want, then discard to end your turn.`);
       render();
     } catch (error) { showGameError(error); }
   }
@@ -972,9 +984,9 @@
     if (!options.length) return showInfo('Not a legal meld', `A meld needs 3+ tiles sharing one number or one color, at least 2 natural tiles, and no more than 2 wilds.${state.allowDuplicates ? '' : ' Each identity must be unique (no duplicates).'} Black tiles can only be melded together when doing so makes you go out.`);
     const remaining = p.hand.length - selected.length;
     const legalOptions = options.filter(o => remaining > 1 || canGoOut(p, state.players.length,
-      completionState({ ...o, tiles: selected }) ? 1 : 0));
+      completionState({ ...o, tiles: selected }) ? 1 : 0, state.requiredCompletions));
     if (!legalOptions.length) return showInfo('No legal way to finish the turn',
-      `You cannot leave yourself with one tile unless you have enough completed melds to go out (${requiredCompletedMelds(state.players.length)} needed). A new completion made by this play counts.`);
+      `You cannot leave yourself with one tile unless you have enough completed melds to go out (${requiredCompletedMelds(state.players.length, state.requiredCompletions)} needed). A new completion made by this play counts.`);
     if (legalOptions.length === 1) return finalizeNewMeld(legalOptions[0]);
     showChoice('Choose meld type', 'These tiles can legally form more than one kind of meld.', legalOptions.map(o => ({
       label: o.type === 'number' ? `Number meld: ${o.target}s` : `Color meld: ${COLORS[o.target].name}`,
@@ -1011,15 +1023,29 @@
   }
 
   function discardSelected() {
-    if (state.phase !== 'play' || ui.selected.size !== 1 || !canActOnline()) return;
-    if(online.active)return serverAction('discard',{tileId:selectedTiles()[0].id});
+    if (state.phase !== 'play' || !ui.selected.size || !canActOnline()) return;
+    const selected = selectedTiles();
+    const limit = discardLimit(state, handPlayer());
+    if (selected.length > limit) return showInfo('Too many discards', `Select up to ${limit} tile${limit === 1 ? '' : 's'} to discard.`);
+    if (selected.length === 2) {
+      return showChoice('Choose the top discard', 'Both selected tiles will be discarded together. Which tile should go on top?',
+        selected.map(top => ({label: `Top: ${tileAria(top)}`,
+          action: () => finalizeDiscard([...selected.filter(tile => tile.id !== top.id), top])})));
+    }
+    finalizeDiscard(selected);
+  }
+
+  function finalizeDiscard(tiles) {
+    if (state.phase !== 'play' || !canActOnline()) return;
+    const ids = tiles.map(tile => tile.id);
+    if(online.active)return serverAction('discard',{tileIds:ids});
     try {
       const p = currentPlayer();
-      const tile = selectedTiles()[0];
-      const result = game.discard(tile.id);
+      const result = game.discard(ids);
       ui.selected.clear();
-      if (result.winnerId !== null) return endRound(result.winnerId, `${p.name} went out by discarding the last tile.`);
-      setMessage(`${p.name} discarded ${tileAria(tile)}.`);
+      closeModal();
+      if (result.winnerId !== null) return endRound(result.winnerId, `${p.name} went out by discarding their last ${tileCount(tiles.length)}.`);
+      setMessage(`${p.name} discarded ${tiles.map(tileAria).join(' and ')}${tiles.length === 2 ? ' (last tile on top)' : ''}.`);
       advanceTurn();
     } catch (error) { showGameError(error); }
   }
@@ -1261,7 +1287,7 @@
       const left = document.createElement('div');
       left.innerHTML = `<div class="player-name">${escapeHtml(p.name)}</div><div class="scoreline"><span class="score-piece">${tileCount(p.hand.length)} in hand</span> · <span class="score-piece">${p.totalScore} points total</span> · <span class="score-piece">${provisionalRoundScore(p)} points on table</span></div>`;
       const right = document.createElement('span');
-      const eligible = canGoOut(p, state.players.length);
+      const eligible = canGoOut(p, state.players.length, 0, state.requiredCompletions);
       right.className = `pill ${eligible ? 'good' : ''}`;
       right.textContent = eligible ? 'Can go out' : `${p.melds.length} meld${p.melds.length === 1 ? '' : 's'}`;
       head.append(left,right);
@@ -1563,7 +1589,8 @@
     const p = handPlayer();
     const canDraw = isMyTurn() && !online.busy && state.phase === 'draw' && state.stock.length > 0;
     const canTake = isMyTurn() && !online.busy && state.phase === 'draw' && hasAnyTakeOption(p);
-    const canDiscard = canActOnline() && state.phase === 'play' && ui.selected.size === 1;
+    const limit = discardLimit(state, p);
+    const canDiscard = canActOnline() && state.phase === 'play' && ui.selected.size > 0 && ui.selected.size <= limit;
     const lastDraw=online.active && !isMyTurn() && state.phase==='play' &&
       online.confirmed?.lastDraw?.playerId===state.current ? online.confirmed.lastDraw : null;
     const drawerName=lastDraw ? state.players[lastDraw.playerId]?.name : null;
@@ -1589,8 +1616,9 @@
     if (state.discardFrozen) parts.push('frozen');
     if (state.discard.length && state.discard[state.discard.length-1].kind === 'black') parts.push('blocked');
     els.discardInfo.textContent = parts.join(' · ');
-    els.discardHint.textContent = canTake ? 'Tap to take the pile' : canDiscard ? 'Tap or drop here to discard selected tile'
-      : lastDraw?.source==='discard' ? `${drawerName} took ${tileCount(lastDraw.count)}` : '';
+    els.discardHint.textContent = canTake ? 'Tap to take the pile' : canDiscard ? (ui.selected.size === 2 ? 'Tap or drop here to discard both selected tiles' : 'Tap or drop here to discard selected tile')
+      : lastDraw?.source==='discard' ? `${drawerName} took ${tileCount(lastDraw.count)}`
+      : canActOnline() && state.phase==='play' && limit===2 ? 'You may discard 1 or 2 tiles' : '';
     els.discardPileCard.classList.toggle('opponent-drew',lastDraw?.source==='discard');
     els.discardPileCard.classList.toggle('action-ready', canTake || canDiscard);
     els.discardPileCard.dataset.dropAction = 'discard';
@@ -1873,8 +1901,6 @@
       }
       if (drag.dropAction === 'discard') {
         if (state.phase === 'play') {
-          ui.selected.clear();
-          ui.selected.add(drag.id);
           discardSelected();
         } else {
           render();
@@ -1947,7 +1973,7 @@
         if (!canTopAddToMeld(top,m,state.allowDuplicates)) return;
         const remainingAfterPickup = p.hand.length + state.discard.length - 1;
         const newCompletion = !m.completion && !!completionState({ ...m, tiles: [...m.tiles, top] });
-        if (remainingAfterPickup <= 1 && !canGoOut(p, state.players.length, newCompletion ? 1 : 0)) return;
+        if (remainingAfterPickup <= 1 && !canGoOut(p, state.players.length, newCompletion ? 1 : 0, state.requiredCompletions)) return;
         options.push({ label: `Add ${tileAria(top)} to ${meldName(m)}`, action: () => takePileIntoExisting(m.id) });
       });
     }
@@ -1956,7 +1982,7 @@
     const remaining = p.hand.length - selected.length + state.discard.length - 1;
     if (remaining <= 1) {
       newOpts = newOpts.filter(o => canGoOut(p, state.players.length,
-        completionState({ type: o.type, target: o.target, tiles: [...selected, top], completion: null }) ? 1 : 0));
+        completionState({ type: o.type, target: o.target, tiles: [...selected, top], completion: null }) ? 1 : 0, state.requiredCompletions));
     }
     newOpts.forEach(o => {
       const label = `Start new ${o.type === 'number' ? `${o.target}s` : COLORS[o.target].name} meld using the selected tiles`;
@@ -2037,8 +2063,8 @@
   function activateDiscard() {
     if (!state || !canActOnline()) return;
     if (state.phase === 'draw') return openTakePile();
-    if (state.phase === 'play' && ui.selected.size === 1) return discardSelected();
-    if (state.phase === 'play') setMessage('Select one tile, then tap the discard pile—or drag a tile onto it.');
+    if (state.phase === 'play' && ui.selected.size) return discardSelected();
+    if (state.phase === 'play') setMessage(`Select ${discardLimit(state, handPlayer()) === 2 ? 'one or two tiles' : 'one tile'}, then tap the discard pile—or drag your selection onto it.`);
   }
   els.stockPileCard.addEventListener('click', activateStock);
   els.stockPileCard.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); activateStock(); } });
@@ -2222,12 +2248,19 @@
     </div>`).join('')+Array.from({length:lobby.playerCount-lobby.players.length},()=>'<div class="lobby-player vacant muted">Waiting for player…</div>').join('');
     const count=document.getElementById('lobbyPlayerCount'),target=document.getElementById('lobbyTargetScore');
     const first=document.getElementById('lobbyFirstPlayer'),duplicates=document.getElementById('lobbyAllowDuplicates');
+    const randomNaturals=document.getElementById('lobbyRandomNaturals');
+    const requiredCompletions=document.getElementById('lobbyRequiredCompletions');
+    const doubleDiscardScope=document.getElementById('lobbyDoubleDiscardScope');
     if(document.activeElement!==count)count.value=String(lobby.playerCount);
     if(document.activeElement!==target)target.value=String(lobby.targetScore);
     const preferred=document.activeElement===first?first.value:String(lobby.firstPlayer);
     updateFirstPlayerOptions(first,Number(count.value),preferred);
     if(document.activeElement!==duplicates)duplicates.value=String(lobby.allowDuplicates);
-    count.disabled=target.disabled=first.disabled=duplicates.disabled=!lobby.isHost;
+    if(document.activeElement!==randomNaturals)randomNaturals.value=String(lobby.randomNaturals ?? false);
+    if(document.activeElement!==requiredCompletions)requiredCompletions.value=String(lobby.requiredCompletions ?? 2);
+    if(document.activeElement!==doubleDiscardScope)doubleDiscardScope.value=lobby.doubleDiscardScope ?? 'self';
+    doubleDiscardScope.disabled=!lobby.isHost || duplicates.value!=='false';
+    count.disabled=target.disabled=first.disabled=duplicates.disabled=randomNaturals.disabled=requiredCompletions.disabled=!lobby.isHost;
     document.getElementById('lobbySaveSettingsBtn').classList.toggle('hidden',!lobby.isHost);
     document.getElementById('lobbyCloseBtn').classList.toggle('hidden',!lobby.isHost);
     document.getElementById('lobbySettingsNote').textContent=lobby.isHost?'Only the host can change the settings.':'Room settings are controlled by the host.';
@@ -2339,7 +2372,16 @@
     playerCount:Number(document.getElementById('lobbyPlayerCount').value),
     targetScore:Number(document.getElementById('lobbyTargetScore').value),
     firstPlayer:selectedFirstPlayer(document.getElementById('lobbyFirstPlayer')),
-    allowDuplicates:document.getElementById('lobbyAllowDuplicates').value==='true'}));
+    allowDuplicates:document.getElementById('lobbyAllowDuplicates').value==='true',
+    randomNaturals:document.getElementById('lobbyRandomNaturals').value==='true',
+    requiredCompletions:Number(document.getElementById('lobbyRequiredCompletions').value),
+    doubleDiscardScope:document.getElementById('lobbyDoubleDiscardScope').value}));
+  for(const [duplicatesId,scopeId] of [['localAllowDuplicates','localDoubleDiscardScope'],['lobbyAllowDuplicates','lobbyDoubleDiscardScope']]) {
+    const duplicates=document.getElementById(duplicatesId),scope=document.getElementById(scopeId);
+    duplicates.addEventListener('change',()=>{
+      scope.disabled=duplicates.value!=='false' || (scopeId==='lobbyDoubleDiscardScope' && !online.lobby?.isHost);
+    });
+  }
   document.getElementById('lobbyStartBtn').addEventListener('click',()=>onlineSend({type:'startMatch'}));
   document.getElementById('lobbyLeaveBtn').addEventListener('click',requestLeaveRoom);
   document.getElementById('lobbyCloseBtn').addEventListener('click',()=>{
